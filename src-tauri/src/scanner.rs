@@ -55,6 +55,7 @@ pub fn spawn_scan(app: AppHandle, db_path: PathBuf, scanning: Arc<AtomicBool>) {
 }
 
 fn scan(app: &AppHandle, db_path: &Path) -> Result<Finished> {
+    let started = std::time::Instant::now();
     let conn = db::open(db_path)?;
     let folders = db::folders(&conn)?;
 
@@ -71,6 +72,7 @@ fn scan(app: &AppHandle, db_path: &Path) -> Result<Finished> {
         rows.collect::<rusqlite::Result<_>>()?
     };
 
+    let walked = started.elapsed();
     let total = files.len();
     let seen: HashSet<String> = files.iter().map(|p| p.to_string_lossy().into_owned()).collect();
     let todo: Vec<&PathBuf> = files
@@ -119,10 +121,12 @@ fn scan(app: &AppHandle, db_path: &Path) -> Result<Finished> {
         }
         drop(tx);
 
+        let mut write_time = std::time::Duration::ZERO;
         let mut done = total - todo.len();
         let mut in_batch = 0;
         conn.execute_batch("BEGIN")?;
         for (path, track) in rx {
+            let w = std::time::Instant::now();
             match track {
                 Some(t) => {
                     db::upsert_track(&conn, &t)?;
@@ -136,11 +140,16 @@ fn scan(app: &AppHandle, db_path: &Path) -> Result<Finished> {
                 conn.execute_batch("COMMIT; BEGIN")?;
                 in_batch = 0;
             }
+            write_time += w.elapsed();
             if done % 25 == 0 || done == total {
                 let _ = app.emit("scan-progress", Progress { done, total, current: path });
             }
         }
         conn.execute_batch("COMMIT")?;
+        eprintln!(
+            "scan: walk {:?}, {} files to read, {} workers, db writes {:?}, total {:?}",
+            walked, todo.len(), workers, write_time, started.elapsed()
+        );
         Ok(())
     })?;
 
