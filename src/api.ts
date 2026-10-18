@@ -1,0 +1,124 @@
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+
+export interface Track {
+  id: number;
+  path: string;
+  title: string;
+  artist: string;
+  albumArtist: string;
+  album: string;
+  genre: string;
+  composer: string;
+  comment: string;
+  year: number | null;
+  trackNo: number | null;
+  discNo: number | null;
+  duration: number;
+  bitrate: number | null;
+  sampleRate: number | null;
+  format: string;
+  rating: number;
+  playCount: number;
+  lastPlayed: number | null;
+  dateAdded: number;
+  mtime: number;
+  hasArt: boolean;
+}
+
+export interface SmartRule {
+  field: string;
+  op: string;
+  value: string;
+}
+
+export interface SmartRules {
+  match: "all" | "any";
+  rules: SmartRule[];
+  limit: number | null;
+  sortBy: string | null;
+  sortDesc: boolean;
+}
+
+export interface Playlist {
+  id: number;
+  name: string;
+  kind: "manual" | "smart";
+  rules: SmartRules | null;
+}
+
+export type Repeat = "off" | "all" | "one";
+
+export interface QueueState {
+  trackIds: number[];
+  current: number | null;
+  shuffle: boolean;
+  repeat: Repeat;
+  volume: number;
+  error: string | null;
+}
+
+export interface Tick {
+  trackId: number | null;
+  position: number;
+  duration: number;
+  playing: boolean;
+}
+
+/** Fields left undefined are not changed; "" clears a field. */
+export interface TagEdit {
+  title?: string;
+  artist?: string;
+  albumArtist?: string;
+  album?: string;
+  genre?: string;
+  composer?: string;
+  comment?: string;
+  year?: string;
+  trackNo?: string;
+  discNo?: string;
+  artPath?: string;
+  removeArt?: boolean;
+}
+
+export const api = {
+  getTracks: () => invoke<Track[]>("get_tracks"),
+  getFolders: () => invoke<string[]>("get_folders"),
+  addFolder: (path: string) => invoke<void>("add_folder", { path }),
+  removeFolder: (path: string) => invoke<void>("remove_folder", { path }),
+  rescan: () => invoke<void>("rescan"),
+  setRating: (ids: number[], rating: number) => invoke<void>("set_rating", { ids, rating }),
+  editTags: (ids: number[], edit: TagEdit) => invoke<Track[]>("edit_tags", { ids, edit }),
+
+  getSettings: () => invoke<Record<string, string>>("get_settings"),
+  setSetting: (key: string, value: string) => invoke<void>("set_setting", { key, value }),
+
+  getPlaylists: () => invoke<Playlist[]>("get_playlists"),
+  createPlaylist: (name: string, rules: SmartRules | null = null, trackIds: number[] | null = null) =>
+    invoke<Playlist>("create_playlist", { name, rules, trackIds }),
+  updatePlaylist: (id: number, name: string, rules: SmartRules | null = null) =>
+    invoke<void>("update_playlist", { id, name, rules }),
+  deletePlaylist: (id: number) => invoke<void>("delete_playlist", { id }),
+  playlistTrackIds: (id: number) => invoke<number[]>("playlist_track_ids", { id }),
+  previewSmart: (rules: SmartRules) => invoke<number>("preview_smart", { rules }),
+  setPlaylistTracks: (id: number, trackIds: number[]) => invoke<void>("set_playlist_tracks", { id, trackIds }),
+  addToPlaylist: (id: number, trackIds: number[]) => invoke<void>("add_to_playlist", { id, trackIds }),
+  exportM3u: (id: number, path: string) => invoke<void>("export_m3u", { id, path }),
+  importM3u: (path: string) => invoke<Playlist>("import_m3u", { path }),
+
+  load: (trackIds: number[], index: number) => invoke<void>("player_load", { trackIds, index }),
+  enqueue: (trackIds: number[], next: boolean) => invoke<void>("player_enqueue", { trackIds, next }),
+  cmd: (cmd: string, value?: number) => invoke<void>("player_cmd", { cmd, value }),
+  removeFromQueue: (indices: number[]) => invoke<void>("player_remove", { indices }),
+};
+
+const artVersions = new Map<number, number>();
+
+export function artUrl(id: number): string {
+  const v = artVersions.get(id) ?? 0;
+  return convertFileSrc(String(id), "art") + (v ? `?v=${v}` : "");
+}
+
+/** Force reloading a track's artwork after it changed. */
+export function bumpArt(id: number) {
+  artVersions.set(id, (artVersions.get(id) ?? 0) + 1);
+}
