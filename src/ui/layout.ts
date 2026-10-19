@@ -29,7 +29,15 @@ export function applyLayout() {
     root.setProperty(SIZES[key].cssVar, `${sizeOf(key)}px`);
   }
   root.setProperty("--browser-cols", browserCols().map((n) => `minmax(0, ${n}fr)`).join(" "));
+  const d = document.documentElement.dataset;
+  d.sidebar = sidebarSide();
+  d.np = npSide();
+  d.playerbar = store.settings["layout.playerBar"] === "top" ? "top" : "bottom";
 }
+
+/** Which side of the window the sidebar and the Now Playing panel sit on. */
+export const sidebarSide = (): "left" | "right" => (store.settings["layout.sidebarSide"] === "right" ? "right" : "left");
+export const npSide = (): "left" | "right" => (store.settings["layout.npSide"] === "left" ? "left" : "right");
 
 export async function saveSetting(key: string, value: string) {
   store.settings[key] = value;
@@ -66,10 +74,11 @@ export function dragFrom(handle: HTMLElement, cursor: string, onMove: (dx: numbe
   handle.addEventListener("click", (e) => e.stopPropagation());
 }
 
-function edgeSplitter(target: HTMLElement, edge: "left" | "right" | "bottom", key: SizeKey) {
+/** `edge()` is the side the handle sits on; panels can move, so it's read on each drag. */
+function edgeSplitter(target: HTMLElement, edge: () => "left" | "right" | "bottom", key: SizeKey) {
   const s = SIZES[key];
-  const vertical = edge === "bottom";
-  const handle = h("div", { class: `splitter ${edge}`, title: "Drag to resize, double-click to reset" });
+  const vertical = edge() === "bottom";
+  const handle = h("div", { class: `splitter ${edge()}`, title: "Drag to resize, double-click to reset" });
   target.append(handle);
   let start = 0;
   let current = 0;
@@ -78,7 +87,7 @@ function edgeSplitter(target: HTMLElement, edge: "left" | "right" | "bottom", ke
     handle,
     vertical ? "row-resize" : "col-resize",
     (dx, dy) => {
-      const delta = vertical ? dy : edge === "left" ? -dx : dx;
+      const delta = vertical ? dy : edge() === "left" ? -dx : dx;
       current = Math.round(Math.min(s.max(), Math.max(s.min, start + delta)));
       document.documentElement.style.setProperty(s.cssVar, `${current}px`);
     },
@@ -121,8 +130,8 @@ function browserSplitters() {
 }
 
 export function mountSplitters() {
-  edgeSplitter($("#sidebar"), "right", "layout.sidebar");
-  edgeSplitter($("#nowplaying"), "left", "layout.nowplaying");
-  edgeSplitter($("#browser"), "bottom", "layout.browser");
+  edgeSplitter($("#sidebar"), () => (sidebarSide() === "left" ? "right" : "left"), "layout.sidebar");
+  edgeSplitter($("#nowplaying"), () => (npSide() === "right" ? "left" : "right"), "layout.nowplaying");
+  edgeSplitter($("#browser"), () => "bottom", "layout.browser");
   browserSplitters();
 }

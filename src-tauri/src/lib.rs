@@ -411,6 +411,7 @@ fn player_cmd(state: State<AppState>, cmd: String, value: Option<f64>) -> CmdRes
         "next" => Cmd::Next,
         "prev" => Cmd::Prev,
         "seek" => Cmd::Seek(v),
+        "seekBy" => Cmd::SeekBy(v),
         "volume" => {
             let _ = db::set_setting(&state.conn(), "volume", &v.to_string());
             Cmd::Volume(v as f32)

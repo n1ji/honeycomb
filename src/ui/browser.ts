@@ -94,7 +94,7 @@ export function mountToolbar() {
         : v.kind === "inbox"
           ? "Inbox"
           : v.kind === "queue"
-            ? "Now Playing"
+            ? "Next Up"
             : (store.currentPlaylist?.name ?? "Playlist");
     const n = store.visible.length;
     const total = store.visible.reduce((s, t) => s + t.duration, 0);

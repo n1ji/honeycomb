@@ -4,6 +4,7 @@ import { store } from "../store";
 import { h } from "../util";
 import { run } from "./actions";
 import { button, modal } from "./dialogs";
+import { openColumnsCustomizer, openPlayerBarCustomizer, setLayoutSetting } from "./customize";
 import { openImporter } from "./importer";
 
 export const ACCENTS = ["#f5a623", "#e8590c", "#e03131", "#d6336c", "#ae3ec9", "#4c6ef5", "#1c7ed6", "#0ca678", "#74b816"];
@@ -76,6 +77,65 @@ function lyricsToggle(): HTMLElement {
   const box = h("input", { type: "checkbox", checked: store.settings.lyricsOnline !== "off" });
   box.addEventListener("change", () => run(() => setSetting("lyricsOnline", box.checked ? "on" : "off")));
   return h("label", { class: "check" }, box, "Look up lyrics online");
+}
+
+/** A dropdown bound to a layout setting. `get` maps settings to the selected value. */
+function layoutSelect(options: [string, string][], get: () => string, set: (v: string) => Promise<void>): HTMLSelectElement {
+  const sel = h("select", { class: "input" });
+  for (const [v, label] of options) sel.append(h("option", { value: v, selected: get() === v }, label));
+  sel.addEventListener("change", () => run(() => set(sel.value)));
+  return sel;
+}
+
+function layoutSection(m: { close: () => void }): HTMLElement[] {
+  const sidebar = layoutSelect(
+    [
+      ["left", "Left"],
+      ["right", "Right"],
+    ],
+    () => store.settings["layout.sidebarSide"] || "left",
+    (v) => setLayoutSetting("layout.sidebarSide", v),
+  );
+  const np = layoutSelect(
+    [
+      ["right", "Right"],
+      ["left", "Left"],
+      ["off", "Hidden"],
+    ],
+    () => (store.settings.nowPlayingPanel === "off" ? "off" : store.settings["layout.npSide"] || "right"),
+    async (v) => {
+      await setLayoutSetting("nowPlayingPanel", v === "off" ? "off" : "");
+      if (v !== "off") await setLayoutSetting("layout.npSide", v);
+    },
+  );
+  const bar = layoutSelect(
+    [
+      ["bottom", "Bottom"],
+      ["top", "Top"],
+    ],
+    () => store.settings["layout.playerBar"] || "bottom",
+    (v) => setLayoutSetting("layout.playerBar", v),
+  );
+  const browserBox = h("input", { type: "checkbox", checked: store.settings.browser !== "off" });
+  browserBox.addEventListener("change", () => run(() => setLayoutSetting("browser", browserBox.checked ? "" : "off")));
+  const open = (fn: () => void) => () => {
+    m.close();
+    fn();
+  };
+  return [
+    h("h3", {}, "Layout"),
+    h("label", { class: "field inline" }, h("span", {}, "Sidebar"), sidebar),
+    h("label", { class: "field inline" }, h("span", {}, "Now Playing panel"), np),
+    h("label", { class: "field inline" }, h("span", {}, "Player bar"), bar),
+    h("label", { class: "check" }, browserBox, "Show the Genre / Artist / Album browser"),
+    h(
+      "div",
+      { class: "row" },
+      button("Customize player bar…", open(openPlayerBarCustomizer)),
+      button("Customize columns…", open(openColumnsCustomizer)),
+    ),
+    h("p", { class: "muted" }, "Tip: drag track list headers to reorder columns, and right-click the headers or the player bar for more options."),
+  ];
 }
 
 export async function openSettings() {
@@ -214,6 +274,7 @@ export async function openSettings() {
     h("div", { class: "field inline" }, h("span", {}, "Background"), colorRows[0][2]),
     h("div", { class: "field inline" }, h("span", {}, "Secondary"), colorRows[1][2]),
     h("p", { class: "muted" }, "Background is the track list and browser; secondary is the sidebar, headers and panels. Text switches between light and dark to stay readable."),
+    ...layoutSection(m),
   );
   m.footer.append(button("Done", m.close, true));
   renderSwatches();

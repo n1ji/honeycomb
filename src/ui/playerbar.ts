@@ -3,10 +3,43 @@ import { store } from "../store";
 import { $, fmtTime, h, stars } from "../util";
 import { saveSetting } from "./layout";
 import { openArtViewer } from "./artviewer";
+import { openPlayerBarCustomizer } from "./customize";
 import { icon, setIcon } from "./icons";
 import { mountLyrics } from "./lyrics";
 import { run } from "./actions";
 import { revealPlaying } from "./tracklist";
+import { openMenu } from "./menu";
+
+/** Transport buttons, in their default order. `layout.pbButtons` picks which show and where. */
+export const PB_BUTTONS = [
+  { id: "shuffle", label: "Shuffle" },
+  { id: "back", label: "Back 10 seconds" },
+  { id: "prev", label: "Previous" },
+  { id: "play", label: "Play/Pause" },
+  { id: "next", label: "Next" },
+  { id: "forward", label: "Forward 10 seconds" },
+  { id: "repeat", label: "Repeat" },
+];
+export const DEFAULT_PB_BUTTONS = ["shuffle", "prev", "play", "next", "repeat"];
+
+/** Parts of the bar that can be hidden (`layout.pbHidden`). */
+export const PB_PARTS = [
+  { id: "art", label: "Artwork, title and artist" },
+  { id: "seek", label: "Seek bar and times" },
+  { id: "volume", label: "Volume" },
+];
+
+const words = (v: string | undefined) => (v ?? "").split(" ").filter(Boolean);
+
+export function pbButtons(): string[] {
+  const known = new Set(PB_BUTTONS.map((b) => b.id));
+  const ids = words(store.settings["layout.pbButtons"]).filter((id) => known.has(id));
+  if (!ids.length) return DEFAULT_PB_BUTTONS;
+  // Play/Pause can't be hidden.
+  return ids.includes("play") ? ids : [...ids.slice(0, Math.ceil(ids.length / 2)), "play", ...ids.slice(Math.ceil(ids.length / 2))];
+}
+
+export const pbHidden = () => words(store.settings["layout.pbHidden"]);
 
 const REPEAT_NEXT: Record<Repeat, Repeat> = { off: "all", all: "one", one: "off" };
 const REPEAT_CMD: Record<Repeat, string> = { off: "repeatOff", all: "repeatAll", one: "repeatOne" };
@@ -46,29 +79,37 @@ export function mountPlayerBar() {
   const volume = h("input", { type: "range", class: "volume", min: 0, max: 100, value: 80, title: "Volume" });
   const volIcon = h("button", { class: "pb-btn small", title: "Mute" }, icon("volume"));
 
-  root.append(
-    h(
-      "div",
-      { class: "pb-left", title: "Show playing track", onclick: () => revealPlaying() },
-      art,
-      h("div", { class: "pb-meta" }, title, artist),
-    ),
-    h(
-      "div",
-      { class: "pb-center" },
-      h(
-        "div",
-        { class: "pb-controls" },
-        shuffleBtn,
-        h("button", { class: "pb-btn", title: "Previous", onclick: () => run(() => api.cmd("prev")) }, icon("prev")),
-        playBtn,
-        h("button", { class: "pb-btn", title: "Next", onclick: () => run(() => api.cmd("next")) }, icon("next")),
-        repeatBtn,
-      ),
-      h("div", { class: "pb-seek" }, pos, seek, dur),
-    ),
-    h("div", { class: "pb-right" }, volIcon, volume),
+  const buttons: Record<string, HTMLElement> = {
+    shuffle: shuffleBtn,
+    back: h("button", { class: "pb-btn", title: "Back 10 seconds", onclick: () => run(() => api.cmd("seekBy", -10)) }, icon("back")),
+    prev: h("button", { class: "pb-btn", title: "Previous", onclick: () => run(() => api.cmd("prev")) }, icon("prev")),
+    play: playBtn,
+    next: h("button", { class: "pb-btn", title: "Next", onclick: () => run(() => api.cmd("next")) }, icon("next")),
+    forward: h("button", { class: "pb-btn", title: "Forward 10 seconds", onclick: () => run(() => api.cmd("seekBy", 10)) }, icon("forward")),
+    repeat: repeatBtn,
+  };
+  const controls = h("div", { class: "pb-controls" });
+  const left = h(
+    "div",
+    { class: "pb-left", title: "Show playing track", onclick: () => revealPlaying() },
+    art,
+    h("div", { class: "pb-meta" }, title, artist),
   );
+  const seekRow = h("div", { class: "pb-seek" }, pos, seek, dur);
+  const right = h("div", { class: "pb-right" }, volIcon, volume);
+  root.append(left, h("div", { class: "pb-center" }, controls, seekRow), right);
+
+  const renderLayout = () => {
+    controls.replaceChildren(...pbButtons().map((id) => buttons[id]));
+    const hidden = pbHidden();
+    left.classList.toggle("hidden", hidden.includes("art"));
+    seekRow.classList.toggle("hidden", hidden.includes("seek"));
+    right.classList.toggle("hidden", hidden.includes("volume"));
+  };
+  root.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    openMenu(e.clientX, e.clientY, [{ label: "Customize player bar…", action: openPlayerBarCustomizer }]);
+  });
 
   shuffleBtn.addEventListener("click", () => run(() => api.cmd("shuffle", store.queue.shuffle ? 0 : 1)));
   repeatBtn.addEventListener("click", () => {
@@ -142,6 +183,8 @@ export function mountPlayerBar() {
   store.on("tick", renderTick);
   store.on("queue", renderQueueState);
   store.on("tracks", renderTrack);
+  store.on("settings", renderLayout);
+  renderLayout();
   renderQueueState();
   renderTrack();
 }
@@ -162,7 +205,7 @@ export function mountNowPlaying() {
   const tabs = h("div", { class: "np-tabs" });
   const tab = (key: string, label: string) =>
     h("button", { type: "button", class: "np-tab", "data-tab": key, onclick: () => run(() => showTab(key, true)) }, label);
-  tabs.append(tab("lyrics", "Lyrics"), tab("next", "Up next"));
+  tabs.append(tab("lyrics", "Lyrics"), tab("next", "Next Up"));
   const showTab = async (key: string, save = false) => {
     for (const b of tabs.querySelectorAll<HTMLElement>(".np-tab")) b.classList.toggle("active", b.dataset.tab === key);
     lyricsBox.style.display = key === "lyrics" ? "" : "none";

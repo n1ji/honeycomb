@@ -98,7 +98,7 @@ export function mountSidebar() {
           openMenu(e.clientX, e.clientY, [{ label: "Clear Inbox", disabled: !inboxCount, action: () => run(() => clearInbox()) }]);
         });
       }),
-      item("Now Playing", { kind: "queue" }, "▶", (el) => {
+      item("Next Up", { kind: "queue" }, "▶", (el) => {
         if (queueLen) el.append(h("span", { class: "badge" }, String(queueLen)));
       }),
     );

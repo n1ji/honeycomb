@@ -114,16 +114,61 @@ body {
 }
 
 #app {
-  display: grid;
-  grid-template-columns: var(--sidebar-w, 210px) minmax(0, 1fr) auto;
+  display: flex;
   min-height: 0;
 }
 
 #main {
+  flex: 1;
+  order: 2;
   display: flex;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+}
+
+/* Panels can sit on either side (Settings → Layout). The sidebar stays outermost. */
+#sidebar {
+  width: var(--sidebar-w, 210px);
+  flex-shrink: 0;
+  order: 0;
+}
+
+#nowplaying {
+  flex-shrink: 0;
+  order: 3;
+}
+
+[data-sidebar="right"] #sidebar {
+  order: 4;
+  border-right: none;
+  border-left: 1px solid var(--border);
+}
+
+[data-sidebar="right"] #sidebar > .splitter {
+  left: 0;
+  right: auto;
+}
+
+[data-np="left"] #nowplaying {
+  order: 1;
+  border-left: none;
+  border-right: 1px solid var(--border);
+}
+
+[data-np="left"] #nowplaying > .splitter {
+  left: auto;
+  right: 0;
+}
+
+[data-playerbar="top"] body {
+  grid-template-rows: auto 1fr;
+}
+
+[data-playerbar="top"] #playerbar {
+  order: -1;
+  border-top: none;
+  border-bottom: 1px solid var(--border);
 }
 
 /* ---------- sidebar ---------- */
@@ -483,6 +528,7 @@ body {
 
 .tl-header {
   display: grid;
+  position: relative;
   background: var(--panel);
   border-bottom: 1px solid var(--border);
   padding-right: 10px;
@@ -965,9 +1011,10 @@ body.resizing {
   height: 18px;
 }
 
-/* The triangle's visual centre is left of its box; nudge it. */
+/* The play path is already drawn right of the grid's centre for optical balance;
+   pull it back a touch so it doesn't look pushed against the circle's right edge. */
 .pb-btn.play .icon-play {
-  transform: translateX(1px);
+  transform: translateX(-1px);
 }
 
 .pb-btn.play:hover {
@@ -1466,8 +1513,8 @@ input[type="color"] {
 }
 
 @media (max-width: 760px) {
-  #app {
-    grid-template-columns: 160px minmax(0, 1fr);
+  #sidebar {
+    width: 160px;
   }
   #search {
     width: 140px;
@@ -1489,4 +1536,77 @@ input[type="color"] {
 
 ::-webkit-scrollbar-thumb:hover {
   background-color: var(--muted);
+}
+
+[data-playerbar="top"] #toast {
+  bottom: 24px;
+}
+
+/* Parts hidden in "Customize player bar" keep their space so the controls stay centred. */
+.pb-left.hidden,
+.pb-right.hidden {
+  visibility: hidden;
+}
+
+.pb-seek.hidden {
+  display: none;
+}
+
+/* ---------- customize dialogs ---------- */
+
+.order-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  max-height: 340px;
+  overflow-y: auto;
+}
+
+.order-list li {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 6px 3px 8px;
+}
+
+.order-list li + li {
+  border-top: 1px solid var(--border);
+}
+
+.order-list li .check {
+  flex: 1;
+}
+
+.order-list li.off .check {
+  color: var(--muted);
+}
+
+.order-list .move {
+  padding: 0 7px;
+  min-width: 0;
+  height: 22px;
+  line-height: 1;
+}
+
+.order-parts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Dragging a track list column header to move it. */
+.tl-header .tl-cell.dragging {
+  opacity: 0.45;
+}
+
+.col-drop {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  pointer-events: none;
 }

@@ -1,8 +1,10 @@
 import { api, Track } from "../api";
 import { SortKey, store } from "../store";
-import { $, fmtTime, h, modKey, stars } from "../util";
+import { $, fmtDate, fmtTime, h, modKey, stars } from "../util";
 import { openTrackMenu, removeSelected } from "./actions";
+import { openColumnsCustomizer, setLayoutSetting } from "./customize";
 import { dragFrom, saveSetting } from "./layout";
+import { MenuItem, openMenu, SEP } from "./menu";
 
 const rowH = () => (store.settings.density === "compact" ? 22 : 26);
 const OVERSCAN = 8;
@@ -11,12 +13,15 @@ interface Col {
   key: SortKey;
   label: string;
   width: string;
+  /** Name in menus when the header label is too short to say what it is. */
+  menuLabel?: string;
   cls?: string;
   render?: (t: Track, row: number) => string;
 }
 
-const COLS: Col[] = [
-  { key: "trackNo", label: "#", width: "44px", cls: "num" },
+/** Every column the list can show; `layout.columnsShown` picks which ones and their order. */
+export const COLS: Col[] = [
+  { key: "trackNo", label: "#", menuLabel: "Track number", width: "44px", cls: "num" },
   { key: "title", label: "Title", width: "minmax(160px, 2fr)" },
   { key: "artist", label: "Artist", width: "minmax(110px, 1.3fr)" },
   { key: "album", label: "Album", width: "minmax(110px, 1.3fr)" },
@@ -25,7 +30,37 @@ const COLS: Col[] = [
   { key: "duration", label: "Time", width: "56px", cls: "num", render: (t) => fmtTime(t.duration) },
   { key: "rating", label: "Rating", width: "86px" },
   { key: "playCount", label: "Plays", width: "50px", cls: "num", render: (t) => (t.playCount ? String(t.playCount) : "") },
+  { key: "albumArtist", label: "Album Artist", width: "minmax(110px, 1.2fr)" },
+  { key: "composer", label: "Composer", width: "minmax(100px, 1fr)" },
+  { key: "discNo", label: "Disc", width: "44px", cls: "num", render: (t) => (t.discNo ? String(t.discNo) : "") },
+  { key: "format", label: "Format", width: "64px" },
+  { key: "bitrate", label: "Bitrate", width: "74px", cls: "num", render: (t) => (t.bitrate ? `${t.bitrate} kbps` : "") },
+  {
+    key: "sampleRate",
+    label: "Sample Rate",
+    width: "84px",
+    cls: "num",
+    render: (t) => (t.sampleRate ? `${(t.sampleRate / 1000).toFixed(1)} kHz` : ""),
+  },
+  { key: "dateAdded", label: "Added", menuLabel: "Date added", width: "92px", cls: "num", render: (t) => fmtDate(t.dateAdded) },
+  { key: "lastPlayed", label: "Last Played", width: "92px", cls: "num", render: (t) => fmtDate(t.lastPlayed) },
+  { key: "comment", label: "Comment", width: "minmax(100px, 1fr)" },
 ];
+
+export const DEFAULT_COLUMNS = ["trackNo", "title", "artist", "album", "year", "genre", "duration", "rating", "playCount"];
+const COLS_SHOWN = "layout.columnsShown";
+const BY_KEY = new Map(COLS.map((c) => [c.key as string, c]));
+
+/** Keys of the shown columns, in order. Title is always shown. */
+export function shownColumns(): string[] {
+  const keys = (store.settings[COLS_SHOWN] ?? "").split(" ").filter((k) => BY_KEY.has(k));
+  if (!keys.length) return DEFAULT_COLUMNS;
+  return keys.includes("title") ? keys : ["title", ...keys];
+}
+
+const shown = (): Col[] => shownColumns().map((k) => BY_KEY.get(k)!);
+
+const saveColumns = (keys: string[]) => setLayoutSetting(COLS_SHOWN, keys.join(" "));
 
 const COL_WIDTHS = "layout.columns";
 
@@ -40,7 +75,7 @@ function colWidths(): Record<string, number> {
 
 /** Header and rows share one grid template through a CSS variable. */
 function applyColumns(widths = colWidths()) {
-  const template = COLS.map((c) => (widths[c.key] ? `${widths[c.key]}px` : c.width)).join(" ");
+  const template = shown().map((c) => (widths[c.key] ? `${widths[c.key]}px` : c.width)).join(" ");
   $("#tracklist").style.setProperty("--tl-cols", template);
 }
 
@@ -104,7 +139,15 @@ export function mountTrackList() {
   store.on("selection", schedule);
   store.on("tracks", schedule);
   store.on("queue", schedule);
-  store.on("settings", schedule);
+  store.on("settings", () => {
+    applyColumns();
+    renderHeader();
+    schedule();
+  });
+  header.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    openColumnsMenu(e.clientX, e.clientY);
+  });
   let lastTrack: number | null = null;
   store.on("tick", () => {
     if (store.tick.trackId !== lastTrack) {
@@ -116,19 +159,92 @@ export function mountTrackList() {
 
 function renderHeader() {
   header.replaceChildren(
-    ...COLS.map((c) => {
+    ...shown().map((c) => {
       const sorted = store.sort?.key === c.key;
-      const label = c.key === "trackNo" && positional() ? "#" : c.label;
       const cell = h(
         "div",
-        { class: `tl-cell ${c.cls ?? ""} ${sorted ? "sorted" : ""}`, onclick: () => store.setSort(c.key) },
-        label,
+        {
+          class: `tl-cell ${c.cls ?? ""} ${sorted ? "sorted" : ""}`,
+          title: c.menuLabel ?? "",
+          onclick: () => {
+            if (!justDragged) store.setSort(c.key);
+          },
+        },
+        c.label,
         sorted ? h("span", { class: "arrow" }, store.sort!.desc ? "▼" : "▲") : null,
       );
+      cell.addEventListener("pointerdown", (e) => startColumnDrag(e, c.key, cell));
       cell.append(resizeHandle(c, cell));
       return cell;
     }),
   );
+}
+
+/** Right-click on the header: tick columns on and off. */
+function openColumnsMenu(x: number, y: number) {
+  const keys = shownColumns();
+  const items: MenuItem[] = COLS.map((c) => {
+    const on = keys.includes(c.key);
+    return {
+      label: `${on ? "✓" : "\u2003"}  ${c.menuLabel ?? c.label}`,
+      disabled: c.key === "title",
+      action: () => void saveColumns(on ? keys.filter((k) => k !== c.key) : [...keys, c.key]),
+    };
+  });
+  openMenu(x, y, [
+    ...items,
+    SEP,
+    { label: "Customize columns…", action: openColumnsCustomizer },
+    { label: "Reset columns", action: () => void saveColumns([]) },
+  ]);
+}
+
+/** Set after a header drag so the click that ends it doesn't also sort. */
+let justDragged = false;
+
+/** Drag a header cell sideways to move its column. A plain click still sorts. */
+function startColumnDrag(e: PointerEvent, key: string, cell: HTMLElement) {
+  if (e.button !== 0) return;
+  const x0 = e.clientX;
+  const cells = [...header.children] as HTMLElement[];
+  const marker = h("div", { class: "col-drop" });
+  let dragging = false;
+  let slot = -1;
+  const move = (ev: PointerEvent) => {
+    if (!dragging) {
+      if (Math.abs(ev.clientX - x0) < 6) return;
+      dragging = true;
+      cell.classList.add("dragging");
+      header.append(marker);
+      document.body.classList.add("resizing");
+      document.body.style.cursor = "grabbing";
+    }
+    // The gap nearest the pointer: before the first cell whose middle is to its right.
+    const rects = cells.map((c) => c.getBoundingClientRect());
+    slot = rects.findIndex((r) => ev.clientX < r.left + r.width / 2);
+    if (slot < 0) slot = cells.length;
+    const x = slot < cells.length ? rects[slot].left : rects[rects.length - 1].right;
+    marker.style.left = `${x - header.getBoundingClientRect().left - 1}px`;
+  };
+  const up = () => {
+    window.removeEventListener("pointermove", move);
+    if (!dragging) return;
+    cell.classList.remove("dragging");
+    marker.remove();
+    document.body.classList.remove("resizing");
+    document.body.style.cursor = "";
+    justDragged = true;
+    setTimeout(() => (justDragged = false));
+    const keys = [...shownColumns()];
+    const from = keys.indexOf(key);
+    const to = slot > from ? slot - 1 : slot;
+    if (from < 0 || to === from) return;
+    keys.splice(to, 0, keys.splice(from, 1)[0]);
+    void saveColumns(keys);
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", up, { once: true });
+  window.addEventListener("pointercancel", up, { once: true });
 }
 
 /** Drag a header cell's right edge to set that column's width; double-click resets it. */
@@ -185,6 +301,7 @@ function render() {
   const playingId = store.tick.trackId;
   const inQueue = store.view.kind === "queue";
   const pos = positional();
+  const cols = shown();
   const out: HTMLElement[] = [];
   for (let i = first; i < last; i++) {
     const t = rows[i];
@@ -196,7 +313,7 @@ function render() {
     });
     row.style.transform = `translateY(${i * rowH()}px)`;
     row.style.height = `${rowH()}px`;
-    for (const c of COLS) {
+    for (const c of cols) {
       let cell: HTMLElement;
       if (c.key === "rating") {
         cell = h("div", { class: "tl-cell rating" }, stars(t.rating));
