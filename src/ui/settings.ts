@@ -8,12 +8,61 @@ import { openImporter } from "./importer";
 
 export const ACCENTS = ["#f5a623", "#e8590c", "#e03131", "#d6336c", "#ae3ec9", "#4c6ef5", "#1c7ed6", "#0ca678", "#74b816"];
 
-/** Apply theme and accent from settings. Themes are CSS variable sets keyed by data-theme. */
+/** Relative luminance of a #rrggbb color, 0 (black) to 1 (white). */
+function luminance(hex: string): number {
+  const [r, g, b] = [1, 3, 5].map((i) => {
+    const c = parseInt(hex.slice(i, i + 2), 16) / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+/** Variables a custom background/secondary color overrides; cleared when both are unset. */
+const CUSTOM_VARS = ["--bg", "--input-bg", "--panel", "--panel-2", "--border", "--text", "--muted", "--row-alt", "--hover", "--shadow", "color-scheme"];
+
+/**
+ * Apply theme, accent and custom colors from settings. Themes are CSS variable
+ * sets keyed by data-theme; custom colors override them inline, and text and
+ * borders follow the background's brightness so they stay readable.
+ */
 export function applyTheme() {
   const root = document.documentElement;
   root.dataset.theme = store.settings.theme || "system";
   root.style.setProperty("--accent", store.settings.accent || ACCENTS[0]);
   root.dataset.density = store.settings.density || "normal";
+
+  const bg = store.settings.bgColor || "";
+  const panel = store.settings.panelColor || "";
+  for (const v of CUSTOM_VARS) root.style.removeProperty(v);
+  if (!bg && !panel) return;
+
+  const set = (k: string, v: string) => root.style.setProperty(k, v);
+  if (bg) {
+    set("--bg", bg);
+    set("--input-bg", `color-mix(in srgb, ${bg} 85%, black)`);
+  }
+  if (panel) {
+    set("--panel", panel);
+    set("--panel-2", `color-mix(in srgb, ${panel} 92%, var(--text))`);
+  }
+  const light = luminance(bg || panel) > 0.4;
+  set("--text", light ? "#1d1d20" : "#e7e7e9");
+  set("--muted", light ? "#5f6067" : "#a0a1a8");
+  set("--row-alt", light ? "rgba(0, 0, 0, 0.025)" : "rgba(255, 255, 255, 0.022)");
+  set("--hover", light ? "rgba(0, 0, 0, 0.05)" : "rgba(255, 255, 255, 0.055)");
+  set("--shadow", light ? "rgba(0, 0, 0, 0.18)" : "rgba(0, 0, 0, 0.5)");
+  set("--border", `color-mix(in srgb, var(--panel) 84%, var(--text))`);
+  set("color-scheme", light ? "light" : "dark");
+}
+
+/** Current value of a theme color, as #rrggbb for a color input. */
+function themeColor(cssVar: string): string {
+  const probe = h("span", {});
+  probe.style.color = `var(${cssVar})`;
+  document.body.append(probe);
+  const m = getComputedStyle(probe).color.match(/\d+(\.\d+)?/g) ?? ["0", "0", "0"];
+  probe.remove();
+  return "#" + m.slice(0, 3).map((n) => Math.round(Number(n)).toString(16).padStart(2, "0")).join("");
 }
 
 async function setSetting(key: string, value: string) {
@@ -108,6 +157,29 @@ export async function openSettings() {
     }),
   );
 
+  /** A color picker bound to a setting, with Reset back to the theme's color. */
+  const colorSetting = (key: string, cssVar: string) => {
+    const input = h("input", { type: "color", value: store.settings[key] || themeColor(cssVar) });
+    input.addEventListener("input", () => run(() => setSetting(key, input.value)));
+    const reset = button("Reset", () =>
+      run(async () => {
+        await setSetting(key, "");
+        input.value = themeColor(cssVar);
+      }),
+    );
+    return h("div", { class: "row" }, input, reset);
+  };
+  theme.addEventListener("change", () => {
+    // Pickers that follow the theme show its new colors.
+    for (const [key, cssVar, el] of colorRows) {
+      if (!store.settings[key]) (el.querySelector("input") as HTMLInputElement).value = themeColor(cssVar);
+    }
+  });
+  const colorRows: [string, string, HTMLElement][] = [
+    ["bgColor", "--bg", colorSetting("bgColor", "--bg")],
+    ["panelColor", "--panel", colorSetting("panelColor", "--panel")],
+  ];
+
   m.body.append(
     h("h3", {}, "Library"),
     folderList,
@@ -126,6 +198,9 @@ export async function openSettings() {
     h("label", { class: "field inline" }, h("span", {}, "Theme"), theme),
     h("label", { class: "field inline" }, h("span", {}, "Row density"), density),
     h("div", { class: "field inline" }, h("span", {}, "Accent color"), swatches),
+    h("div", { class: "field inline" }, h("span", {}, "Background"), colorRows[0][2]),
+    h("div", { class: "field inline" }, h("span", {}, "Secondary"), colorRows[1][2]),
+    h("p", { class: "muted" }, "Background is the track list and browser; secondary is the sidebar, headers and panels. Text switches between light and dark to stay readable."),
   );
   m.footer.append(button("Done", m.close, true));
   renderSwatches();
