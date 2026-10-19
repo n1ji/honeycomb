@@ -29,6 +29,7 @@ fn column(field: &str) -> Option<(&'static str, Kind)> {
         "discNo" => ("disc_no", Kind::Num),
         "duration" => ("duration", Kind::Num),
         "rating" => ("rating", Kind::Num),
+        "loved" => ("loved", Kind::Num),
         "playCount" => ("play_count", Kind::Num),
         "bitrate" => ("bitrate", Kind::Num),
         "dateAdded" => ("date_added", Kind::Date),
@@ -64,7 +65,11 @@ fn compile_rule(rule: &SmartRule, params: &mut Vec<Value>) -> Result<String> {
             format!("instr(lower({col}), ?) = 1")
         }
         (Kind::Num, op) => {
-            let n: f64 = v.parse().unwrap_or(0.0);
+            let mut n: f64 = v.parse().unwrap_or(0.0);
+            // Rules are written in stars (3.5); the column holds half-stars (7).
+            if col == "rating" {
+                n *= 2.0;
+            }
             params.push(Value::Real(n));
             let cmp = match op {
                 "is" => "=",
@@ -135,7 +140,7 @@ mod tests {
                 ..Default::default()
             };
             let id = db::upsert_track(&conn, &t).unwrap();
-            conn.execute("UPDATE tracks SET rating = ?2 WHERE id = ?1", rusqlite::params![id, rating])
+            conn.execute("UPDATE tracks SET rating = ?2 WHERE id = ?1", rusqlite::params![id, rating * 2])
                 .unwrap();
         };
         add("a", "Alpha Bees", "Electronic", 2021, 5);

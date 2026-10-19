@@ -17,12 +17,14 @@ export interface Track {
   bitrate: number | null;
   sampleRate: number | null;
   format: string;
+  /** Half-stars, 0-10. */
   rating: number;
   playCount: number;
   lastPlayed: number | null;
   dateAdded: number;
   mtime: number;
   hasArt: boolean;
+  loved: boolean;
 }
 
 export interface SmartRule {
@@ -80,6 +82,38 @@ export interface TagEdit {
   removeArt?: boolean;
 }
 
+export interface ImportPreview {
+  libraryTracks: number;
+  stats: {
+    tracks: number;
+    matched: number;
+    unmatched: number;
+    withStats: number;
+    rated: number;
+    played: number;
+    loved: number;
+  } | null;
+  playlists: {
+    index: number;
+    name: string;
+    source: string;
+    total: number;
+    matched: number;
+    placeholders: number;
+    missing: number;
+    exists: boolean;
+  }[];
+  report: string;
+}
+
+export interface ImportOutcome {
+  statsUpdated: number;
+  playlistsCreated: number;
+  playlistsReplaced: number;
+  placeholdersSkipped: number;
+  missingSkipped: number;
+}
+
 export const api = {
   getTracks: () => invoke<Track[]>("get_tracks"),
   getFolders: () => invoke<string[]>("get_folders"),
@@ -104,6 +138,11 @@ export const api = {
   addToPlaylist: (id: number, trackIds: number[]) => invoke<void>("add_to_playlist", { id, trackIds }),
   exportM3u: (id: number, path: string) => invoke<void>("export_m3u", { id, path }),
   importM3u: (path: string) => invoke<Playlist>("import_m3u", { path }),
+  importPreview: (xmlPath: string | null, m3uPaths: string[]) =>
+    invoke<ImportPreview>("import_preview", { xmlPath, m3uPaths }),
+  importApply: (xmlPath: string | null, m3uPaths: string[], importStats: boolean, playlists: number[]) =>
+    invoke<ImportOutcome>("import_apply", { xmlPath, m3uPaths, importStats, playlists }),
+  saveText: (path: string, text: string) => invoke<void>("save_text", { path, text }),
 
   load: (trackIds: number[], index: number) => invoke<void>("player_load", { trackIds, index }),
   enqueue: (trackIds: number[], next: boolean) => invoke<void>("player_enqueue", { trackIds, next }),

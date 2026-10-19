@@ -1,4 +1,5 @@
 mod db;
+mod importer;
 mod meta;
 mod models;
 mod player;
@@ -84,7 +85,7 @@ fn rescan(app: AppHandle, state: State<AppState>) {
 fn set_rating(state: State<AppState>, ids: Vec<i64>, rating: u8) -> CmdResult<()> {
     let conn = state.conn();
     for id in ids {
-        conn.execute("UPDATE tracks SET rating = ?2 WHERE id = ?1", rusqlite::params![id, rating.min(5)])
+        conn.execute("UPDATE tracks SET rating = ?2 WHERE id = ?1", rusqlite::params![id, rating.min(10)])
             .map_err(err)?;
     }
     Ok(())
@@ -238,9 +239,11 @@ fn import_m3u(state: State<AppState>, path: String) -> CmdResult<Playlist> {
     let mut ids = Vec::new();
     {
         let conn = state.conn();
+        // Paths written on another machine fall back to matching by their tail.
+        let matcher = importer::Matcher::new(&db::all_tracks(&conn).map_err(err)?);
         for line in text.lines() {
             let line = line.trim().trim_start_matches('\u{feff}');
-            if line.is_empty() || line.starts_with('#') {
+            if line.is_empty() || line.starts_with('#') || importer::is_placeholder(line) {
                 continue;
             }
             let p = PathBuf::from(line.replace(['\\', '/'], std::path::MAIN_SEPARATOR_STR));
@@ -252,7 +255,7 @@ fn import_m3u(state: State<AppState>, path: String) -> CmdResult<Playlist> {
                     Ok(t) => Some(db::upsert_track(&conn, &t).map_err(err)?),
                     Err(_) => None,
                 },
-                None => None,
+                None => matcher.find(line, None),
             };
             ids.extend(id);
         }
@@ -263,6 +266,46 @@ fn import_m3u(state: State<AppState>, path: String) -> CmdResult<Playlist> {
         .unwrap_or("Imported")
         .to_string();
     create_playlist(state, name, None, Some(ids))
+}
+
+// ---------- import from another player ----------
+
+fn load_import_source(xml_path: &Option<String>, m3u_paths: &[String]) -> CmdResult<importer::Source> {
+    let mut src = match xml_path {
+        Some(p) => importer::read_library_xml(Path::new(p)).map_err(|e| format!("{e:#}"))?,
+        None => importer::Source::default(),
+    };
+    for f in importer::expand_m3u_paths(m3u_paths) {
+        src.playlists.push(importer::read_m3u(&f).map_err(|e| format!("{e:#}"))?);
+    }
+    Ok(src)
+}
+
+#[tauri::command]
+async fn import_preview(
+    state: State<'_, AppState>,
+    xml_path: Option<String>,
+    m3u_paths: Vec<String>,
+) -> CmdResult<importer::Preview> {
+    let src = load_import_source(&xml_path, &m3u_paths)?;
+    importer::preview(&state.conn(), &src, xml_path.is_some()).map_err(err)
+}
+
+#[tauri::command]
+async fn import_apply(
+    state: State<'_, AppState>,
+    xml_path: Option<String>,
+    m3u_paths: Vec<String>,
+    import_stats: bool,
+    playlists: Vec<usize>,
+) -> CmdResult<importer::Outcome> {
+    let src = load_import_source(&xml_path, &m3u_paths)?;
+    importer::apply(&mut state.conn(), &src, import_stats && xml_path.is_some(), &playlists).map_err(err)
+}
+
+#[tauri::command]
+fn save_text(path: String, text: String) -> CmdResult<()> {
+    std::fs::write(path, text).map_err(err)
 }
 
 // ---------- player ----------
@@ -386,6 +429,9 @@ pub fn run() {
             add_to_playlist,
             export_m3u,
             import_m3u,
+            import_preview,
+            import_apply,
+            save_text,
             player_load,
             player_enqueue,
             player_cmd,

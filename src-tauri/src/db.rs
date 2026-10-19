@@ -7,7 +7,7 @@ use crate::models::{Playlist, SmartRules, Track};
 
 pub const TRACK_COLS: &str = "id, path, title, artist, album_artist, album, genre, composer, comment, \
      year, track_no, disc_no, duration, bitrate, sample_rate, format, rating, play_count, \
-     last_played, date_added, mtime, has_art";
+     last_played, date_added, mtime, has_art, loved";
 
 pub fn open(path: &Path) -> Result<Connection> {
     let conn = Connection::open(path)?;
@@ -61,6 +61,17 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_pt_playlist ON playlist_tracks(playlist_id, position);
         CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
     )?;
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if version < 1 {
+        // v1: ratings move from 0-5 stars to 0-10 half-stars; tracks can be loved.
+        conn.execute_batch(
+            "BEGIN;
+             ALTER TABLE tracks ADD COLUMN loved INTEGER NOT NULL DEFAULT 0;
+             UPDATE tracks SET rating = rating * 2;
+             PRAGMA user_version = 1;
+             COMMIT;",
+        )?;
+    }
     Ok(())
 }
 
@@ -88,6 +99,7 @@ pub fn row_to_track(row: &Row) -> rusqlite::Result<Track> {
         date_added: row.get(19)?,
         mtime: row.get(20)?,
         has_art: row.get(21)?,
+        loved: row.get(22)?,
     })
 }
 
@@ -220,4 +232,33 @@ pub fn set_playlist_track_ids(conn: &mut Connection, id: i64, ids: &[i64]) -> Re
     }
     tx.commit()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn v1_migration_doubles_ratings_once() {
+        let conn = Connection::open_in_memory().unwrap();
+        // A v0 database: the base schema (v1 step skipped) with 0-5 star ratings.
+        conn.execute_batch("PRAGMA user_version = 1;").unwrap();
+        migrate(&conn).unwrap();
+        conn.execute_batch(
+            "PRAGMA user_version = 0;
+             INSERT INTO tracks (path, rating, date_added) VALUES ('a', 4, 0), ('b', 0, 0);",
+        )
+        .unwrap();
+        migrate(&conn).unwrap();
+        migrate(&conn).unwrap(); // a second start must not double again
+        let ratings: Vec<u8> = conn
+            .prepare("SELECT rating FROM tracks ORDER BY path")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(ratings, [8, 0]);
+        assert!(!all_tracks(&conn).unwrap()[0].loved);
+    }
 }

@@ -52,8 +52,19 @@ export function fmtDate(secs: number | null): string {
   return secs ? new Date(secs * 1000).toLocaleDateString() : "";
 }
 
-export function stars(n: number): string {
-  return "★".repeat(n) + "☆".repeat(5 - n);
+/** Five star spans for a 0-10 half-star rating; `data-star` is the star's number (1-5). */
+export function stars(rating: number, cls = "stars"): HTMLElement {
+  const el = h("span", { class: cls });
+  for (let s = 1; s <= 5; s++) {
+    const state = rating >= s * 2 ? "on" : rating === s * 2 - 1 ? "half" : "";
+    el.append(h("span", { class: state, "data-star": s }, "★"));
+  }
+  return el;
+}
+
+/** Text form of a 0-10 rating, e.g. "★★½". */
+export function starsText(rating: number): string {
+  return "★".repeat(Math.floor(rating / 2)) + (rating % 2 ? "½" : "");
 }
 
 let toastTimer = 0;

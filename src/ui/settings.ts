@@ -4,6 +4,7 @@ import { store } from "../store";
 import { h } from "../util";
 import { run } from "./actions";
 import { button, modal } from "./dialogs";
+import { openImporter } from "./importer";
 
 export const ACCENTS = ["#f5a623", "#e8590c", "#e03131", "#d6336c", "#ae3ec9", "#4c6ef5", "#1c7ed6", "#0ca678", "#74b816"];
 
@@ -115,6 +116,10 @@ export async function openSettings() {
       { class: "row" },
       button("Add folder…", addFolder, true),
       button("Rescan now", () => run(api.rescan)),
+      button("Import from another player…", () => {
+        m.close();
+        openImporter();
+      }),
     ),
     h("p", { class: "muted" }, `${store.tracks.size.toLocaleString()} tracks in library. Honeycomb never moves or deletes your files.`),
     h("h3", {}, "Appearance"),

@@ -28,6 +28,8 @@ rodio = { version = "0.21", default-features = false, features = ["playback", "s
 rusqlite = { version = "0.32", features = ["bundled"] }
 walkdir = "2"
 rand = "0.8"
+plist = "1"
+unicode-normalization = "0.1"
 
 # Optimize dependencies in dev builds: unoptimized audio decoding and tag
 # parsing are slow enough to stutter and to make library scans crawl.

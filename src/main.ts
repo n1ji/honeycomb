@@ -5,6 +5,7 @@ import { $, modKey, toast } from "./util";
 import { run } from "./ui/actions";
 import { mountBrowser, mountToolbar } from "./ui/browser";
 import { mountNowPlaying, mountPlayerBar } from "./ui/playerbar";
+import { applyLayout, mountSplitters } from "./ui/layout";
 import { applyTheme, openSettings } from "./ui/settings";
 import { mountSidebar } from "./ui/sidebar";
 import { mountTrackList } from "./ui/tracklist";
@@ -29,6 +30,7 @@ interface Played {
 async function main() {
   store.settings = await api.getSettings();
   applyTheme();
+  applyLayout();
 
   const sidebar = mountSidebar();
   mountToolbar();
@@ -36,6 +38,7 @@ async function main() {
   mountTrackList();
   mountPlayerBar();
   mountNowPlaying();
+  mountSplitters();
   sidebar.setStatus("");
 
   await listen<Tick>("player-tick", (e) => {

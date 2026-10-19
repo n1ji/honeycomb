@@ -94,6 +94,7 @@ pub fn read_track_with(path: &Path, has_folder_art: &dyn Fn(&Path) -> bool) -> R
         date_added: now_secs(),
         mtime: file_mtime(path),
         has_art: has_tag_art || has_folder_art(path),
+        loved: false,
     })
 }
 

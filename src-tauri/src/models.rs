@@ -20,12 +20,14 @@ pub struct Track {
     pub bitrate: Option<u32>,
     pub sample_rate: Option<u32>,
     pub format: String,
+    /// Half-stars, 0-10.
     pub rating: u8,
     pub play_count: u32,
     pub last_played: Option<i64>,
     pub date_added: i64,
     pub mtime: i64,
     pub has_art: bool,
+    pub loved: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

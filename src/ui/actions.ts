@@ -2,7 +2,7 @@ import { ask, open, save } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { api, Playlist } from "../api";
 import { store } from "../store";
-import { toast } from "../util";
+import { starsText, toast } from "../util";
 import { promptText } from "./dialogs";
 import { MenuItem, openMenu, SEP } from "./menu";
 import { openSmartEditor } from "./smarteditor";
@@ -38,8 +38,8 @@ export function openTrackMenu(x: number, y: number) {
     },
     {
       label: "Rating",
-      submenu: [0, 1, 2, 3, 4, 5].map((r) => ({
-        label: r ? "★".repeat(r) : "No rating",
+      submenu: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((r) => ({
+        label: r ? starsText(r) : "No rating",
         action: () => run(() => setRating(ids, r)),
       })),
     },

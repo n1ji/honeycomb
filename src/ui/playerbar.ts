@@ -161,7 +161,7 @@ export function mountNowPlaying() {
         h("div", { class: "np-title" }, t.title),
         h("div", { class: "np-artist" }, t.artist),
         h("div", { class: "np-album" }, [t.album, t.year].filter(Boolean).join(" · ")),
-        h("div", { class: "np-rating" }, stars(t.rating)),
+        stars(t.rating, "np-rating"),
         h(
           "div",
           { class: "np-tech muted" },

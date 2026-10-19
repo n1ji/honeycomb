@@ -40,7 +40,7 @@ export function mountSidebar() {
     const pls = store.playlists;
     const queueLen = store.queue.trackIds.length;
     nav.replaceChildren(
-      h("div", { class: "nav-head" }, "Library"),
+      h("div", { class: "nav-head" }, h("span", {}, "Library")),
       item("Music", { kind: "library" }, "♫", (el) => el.append(h("span", { class: "badge" }, store.tracks.size.toLocaleString()))),
       item("Now Playing", { kind: "queue" }, "▶", (el) => {
         if (queueLen) el.append(h("span", { class: "badge" }, String(queueLen)));
@@ -48,7 +48,7 @@ export function mountSidebar() {
       h(
         "div",
         { class: "nav-head" },
-        "Playlists",
+        h("span", {}, "Playlists"),
         h(
           "span",
           { class: "nav-actions" },

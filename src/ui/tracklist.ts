@@ -1,7 +1,8 @@
 import { api, Track } from "../api";
 import { SortKey, store } from "../store";
-import { $, fmtTime, h, modKey } from "../util";
+import { $, fmtTime, h, modKey, stars } from "../util";
 import { openTrackMenu, removeSelected } from "./actions";
+import { dragFrom, saveSetting } from "./layout";
 
 const rowH = () => (store.settings.density === "compact" ? 22 : 26);
 const OVERSCAN = 8;
@@ -26,7 +27,22 @@ const COLS: Col[] = [
   { key: "playCount", label: "Plays", width: "50px", cls: "num", render: (t) => (t.playCount ? String(t.playCount) : "") },
 ];
 
-const template = COLS.map((c) => c.width).join(" ");
+const COL_WIDTHS = "layout.columns";
+
+/** Columns the user resized, in pixels. Others keep their flexible default. */
+function colWidths(): Record<string, number> {
+  try {
+    return JSON.parse(store.settings[COL_WIDTHS] || "{}");
+  } catch {
+    return {};
+  }
+}
+
+/** Header and rows share one grid template through a CSS variable. */
+function applyColumns(widths = colWidths()) {
+  const template = COLS.map((c) => (widths[c.key] ? `${widths[c.key]}px` : c.width)).join(" ");
+  $("#tracklist").style.setProperty("--tl-cols", template);
+}
 
 let scroller: HTMLElement;
 let spacer: HTMLElement;
@@ -43,7 +59,7 @@ function positional(): boolean {
 export function mountTrackList() {
   const root = $("#tracklist");
   header = h("div", { class: "tl-header" });
-  header.style.gridTemplateColumns = template;
+  applyColumns();
   scroller = h("div", { class: "tl-scroll", tabindex: 0 });
   spacer = h("div", { class: "tl-spacer" });
   rowsEl = h("div", { class: "tl-rows" });
@@ -103,14 +119,48 @@ function renderHeader() {
     ...COLS.map((c) => {
       const sorted = store.sort?.key === c.key;
       const label = c.key === "trackNo" && positional() ? "#" : c.label;
-      return h(
+      const cell = h(
         "div",
         { class: `tl-cell ${c.cls ?? ""} ${sorted ? "sorted" : ""}`, onclick: () => store.setSort(c.key) },
         label,
         sorted ? h("span", { class: "arrow" }, store.sort!.desc ? "▼" : "▲") : null,
       );
+      cell.append(resizeHandle(c, cell));
+      return cell;
     }),
   );
+}
+
+/** Drag a header cell's right edge to set that column's width; double-click resets it. */
+function resizeHandle(c: Col, cell: HTMLElement): HTMLElement {
+  const handle = h("span", { class: "col-resize", title: "Drag to resize, double-click to reset" });
+  let start = 0;
+  let widths: Record<string, number> = {};
+  handle.addEventListener(
+    "pointerdown",
+    () => {
+      start = cell.getBoundingClientRect().width;
+      widths = colWidths();
+    },
+    { capture: true },
+  );
+  dragFrom(
+    handle,
+    "col-resize",
+    (dx) => {
+      widths[c.key] = Math.round(Math.max(36, start + dx));
+      applyColumns(widths);
+    },
+    () => void saveSetting(COL_WIDTHS, JSON.stringify(widths)),
+  );
+  handle.addEventListener("dblclick", (e) => {
+    e.stopPropagation();
+    const w = colWidths();
+    delete w[c.key];
+    applyColumns(w);
+    void saveSetting(COL_WIDTHS, JSON.stringify(w));
+  });
+  return handle;
 }
 
 function schedule() {
@@ -144,16 +194,12 @@ function render() {
       "data-index": i,
       draggable: "true",
     });
-    row.style.gridTemplateColumns = template;
     row.style.transform = `translateY(${i * rowH()}px)`;
     row.style.height = `${rowH()}px`;
     for (const c of COLS) {
       let cell: HTMLElement;
       if (c.key === "rating") {
-        cell = h("div", { class: "tl-cell rating" });
-        for (let s = 1; s <= 5; s++) {
-          cell.append(h("span", { class: s <= t.rating ? "on" : "", "data-star": s }, "★"));
-        }
+        cell = h("div", { class: "tl-cell rating" }, stars(t.rating));
       } else if (c.key === "trackNo") {
         const n = pos ? String(store.visibleSource[i] + 1) : t.trackNo ? String(t.trackNo) : "";
         cell = h("div", { class: "tl-cell num" }, playing ? h("span", { class: "eq" }, "♪") : n);
@@ -197,11 +243,14 @@ function select(i: number, toggle: boolean, range: boolean) {
 async function onRowMouseDown(e: MouseEvent) {
   const i = rowIndex(e);
   if (i < 0) return;
-  const star = (e.target as HTMLElement).dataset.star;
+  const starEl = e.target as HTMLElement;
+  const star = starEl.dataset.star;
   if (star && e.button === 0) {
     const t = store.visible[i];
-    // Clicking the current rating clears it.
-    const rating = Number(star) === t.rating ? 0 : Number(star);
+    // The left half of a star gives a half-star. Clicking the current rating clears it.
+    const box = starEl.getBoundingClientRect();
+    const picked = Number(star) * 2 - (e.clientX < box.left + box.width / 2 ? 1 : 0);
+    const rating = picked === t.rating ? 0 : picked;
     const ids = store.selection.has(i) ? store.selectedIds() : [t.id];
     await api.setRating(ids, rating);
     store.updateTracks(ids.map((id) => ({ ...store.tracks.get(id)!, rating })));
