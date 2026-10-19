@@ -8,7 +8,7 @@ A fast, library-focused desktop music player for macOS and Windows, built with [
 
 - **Library**: add music folders and Honeycomb scans them in the background. Unchanged files are skipped on rescans, and files you delete are removed from the library.
 - **Column browser**: Genre → Artist → Album panes above a fast, virtualized track list that handles libraries with tens of thousands of tracks.
-- **Playback**: gapless playback through a native Rust audio engine (MP3, FLAC, AAC/ALAC in M4A, Ogg Vorbis, WAV, AIFF), with a queue, shuffle, repeat all and repeat one.
+- **Playback**: gapless playback through Kaseki, its native Rust audio engine (MP3, FLAC, AAC/ALAC in M4A, Ogg Vorbis, WAV, AIFF), with a queue, shuffle, repeat all and repeat one.
 - **Tag editor**: edit one track or many at once, including album artist, composer, year, track and disc numbers. You can embed or remove cover art.
 - **Playlists**: manual playlists (drag tracks onto them), smart playlists with rules, and M3U/M3U8 import and export.
 - **Ratings and stats**: 0–5 star ratings, play counts and last-played times.
@@ -53,7 +53,8 @@ src/                 TypeScript UI (no framework)
   api.ts             typed wrappers around the Rust commands
 src-tauri/src/
   lib.rs             Tauri commands and the album-art protocol
-  player.rs          audio thread: queue, gapless playback (rodio + symphonia)
+  player.rs          player thread: queue, shuffle/repeat, device handling
+  kaseki.rs          Kaseki audio engine: decoder thread, ring buffer, resampling, output (symphonia + rubato + cpal)
   scanner.rs         background library scanning
   meta.rs            tag and artwork reading/writing (lofty)
   smart.rs           smart playlist rules → SQL

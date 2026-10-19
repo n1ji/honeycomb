@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use souvlaki::{MediaControlEvent, MediaControls, MediaMetadata, MediaPlayback, MediaPosition, PlatformConfig, SeekDirection};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, Runtime};
 
 use crate::player::{Cmd, PlayerHandle};
 
@@ -83,7 +83,7 @@ fn step(dir: SeekDirection, secs: f64) -> f64 {
 }
 
 /// Show `np` in the OS controls (or clear them). Safe to call from any thread.
-pub fn update(app: &AppHandle, np: Option<NowPlaying>) {
+pub fn update<R: Runtime>(app: &AppHandle<R>, np: Option<NowPlaying>) {
     match &np {
         Some(n) => eprintln!("media state: {} \"{}\"", if n.playing { "playing" } else { "paused" }, n.title),
         None => eprintln!("media state: stopped"),
@@ -119,7 +119,7 @@ pub fn update(app: &AppHandle, np: Option<NowPlaying>) {
 }
 
 /// Write a track's cover to the cache folder and return a file:// URL for it.
-pub fn cover_url(app: &AppHandle, track_id: i64, audio_path: &str) -> Option<String> {
+pub fn cover_url<R: Runtime>(app: &AppHandle<R>, track_id: i64, audio_path: &str) -> Option<String> {
     let dir: PathBuf = app.path().app_cache_dir().ok()?.join("now-playing");
     std::fs::create_dir_all(&dir).ok()?;
     // The file's mtime is in the name, so editing a cover gets a fresh image.

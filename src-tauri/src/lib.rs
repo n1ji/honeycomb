@@ -1,5 +1,6 @@
 mod db;
 mod importer;
+mod kaseki;
 mod lyrics;
 mod media;
 mod meta;
