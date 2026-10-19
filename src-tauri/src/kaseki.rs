@@ -25,7 +25,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SampleFormat, SizedSample};
 use rtrb::{Consumer, Producer, RingBuffer};
 use rubato::{Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction};
-use symphonia::core::audio::{SampleBuffer, SignalSpec};
+use symphonia::core::audio::{Channels, SampleBuffer, SignalSpec};
 use symphonia::core::codecs::{CODEC_TYPE_NULL, Decoder, DecoderOptions};
 use symphonia::core::errors::{Error as SymError, SeekErrorKind};
 use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo};
@@ -165,8 +165,7 @@ impl Output {
             })
             .unwrap_or_default();
         let default_rate = def.sample_rate().0;
-        let supported = |r: u32| rates.iter().any(|&(lo, hi)| lo <= r && r <= hi);
-        let rate = if supported(want_rate) { want_rate } else { default_rate };
+        let rate = pick_rate(&rates, want_rate, default_rate);
 
         let build = |rate: u32| {
             let shared = Arc::new(Shared::new(perceptual_gain(volume), paused));
@@ -207,12 +206,36 @@ impl Output {
         Ok((out, prod))
     }
 
-    /// Whether this output already suits a file at `rate`: it runs at that
-    /// rate, or the device can't and this is its default.
+    /// Whether this output already runs at the rate `pick_rate` would choose
+    /// for a file at `rate`, so it doesn't need reopening.
     pub fn suits(&self, rate: u32) -> bool {
-        let supported = self.rates.iter().any(|&(lo, hi)| lo <= rate && rate <= hi);
-        self.rate == rate || (!supported && self.rate == self.default_rate)
+        self.rate == pick_rate(&self.rates, rate, self.default_rate)
     }
+}
+
+/// Common sample rates, highest first.
+const STANDARD_RATES: [u32; 10] = [384000, 352800, 192000, 176400, 96000, 88200, 48000, 44100, 32000, 22050];
+
+/// The output rate for a file at `want`, given the device's supported
+/// `rates` ranges: the file's own rate if the device can run at it (nothing to
+/// resample); else an exact fraction or multiple of it (192k → 96k, 22.05k →
+/// 44.1k); else the highest common rate up to the file's that the device
+/// offers above its default; else the device's default.
+fn pick_rate(rates: &[(u32, u32)], want: u32, default_rate: u32) -> u32 {
+    let ok = |r: u32| rates.iter().any(|&(lo, hi)| lo <= r && r <= hi);
+    if ok(want) {
+        return want;
+    }
+    if let Some(r) = (2..=8).filter(|k| want % k == 0).map(|k| want / k).find(|&r| r >= 44100 && ok(r)) {
+        return r;
+    }
+    if let Some(r) = (2..=8).map(|k| want * k).find(|&r| r <= 384000 && ok(r)) {
+        return r;
+    }
+    STANDARD_RATES
+        .into_iter()
+        .find(|&r| r <= want && r > default_rate && ok(r))
+        .unwrap_or(default_rate)
 }
 
 impl Drop for Output {
@@ -224,47 +247,115 @@ impl Drop for Output {
 /// The real-time callback: copy from the buffer, apply the gain, and fill any
 /// shortfall with silence. No locks, allocation or I/O.
 fn callback<T: SizedSample + FromSample<f32>>(
-    mut cons: Consumer<f32>,
+    cons: Consumer<f32>,
     shared: Arc<Shared>,
     channels: usize,
     rate: u32,
 ) -> impl FnMut(&mut [T], &cpal::OutputCallbackInfo) + Send + 'static {
-    let mut consumed = 0u64;
-    let mut gain = 0f32;
-    let step = 1.0 / (rate as f32 * RAMP_SECS);
-    move |out: &mut [T], _| {
-        let discard = shared.discard_until.load(Ordering::Acquire);
-        if consumed < discard {
-            let n = ((discard - consumed) as usize).min(cons.slots());
-            if let Ok(chunk) = cons.read_chunk(n) {
+    let mut feeder = Feeder::new(cons, shared, channels, rate);
+    move |out: &mut [T], _| feeder.fill(out)
+}
+
+/// Most channels whose last values are kept for the underrun fade.
+const TAIL_CH: usize = 8;
+
+/// The callback's state, kept apart from cpal so tests can drive it.
+struct Feeder {
+    cons: Consumer<f32>,
+    shared: Arc<Shared>,
+    channels: usize,
+    consumed: u64,
+    gain: f32,
+    /// Gain change per frame while ramping.
+    step: f32,
+    /// Length of a ramp, in frames.
+    ramp_frames: u32,
+    /// The last frame played, so an underrun can fade it out instead of
+    /// dropping straight to silence (which clicks).
+    tail: [f32; TAIL_CH],
+    /// Frames of that fade still to play.
+    tail_left: u32,
+    /// The buffer ran dry and nothing has come since.
+    dry: bool,
+}
+
+impl Feeder {
+    fn new(cons: Consumer<f32>, shared: Arc<Shared>, channels: usize, rate: u32) -> Feeder {
+        let ramp_frames = ((rate as f32 * RAMP_SECS) as u32).max(1);
+        Feeder {
+            cons,
+            shared,
+            channels,
+            consumed: 0,
+            gain: 0.0,
+            step: 1.0 / ramp_frames as f32,
+            ramp_frames,
+            tail: [0.0; TAIL_CH],
+            tail_left: 0,
+            dry: true,
+        }
+    }
+
+    fn fill<T: SizedSample + FromSample<f32>>(&mut self, out: &mut [T]) {
+        let ch = self.channels;
+        let discard = self.shared.discard_until.load(Ordering::Acquire);
+        if self.consumed < discard {
+            let n = ((discard - self.consumed) as usize).min(self.cons.slots());
+            if let Ok(chunk) = self.cons.read_chunk(n) {
                 chunk.commit_all();
-                consumed += n as u64;
+                self.consumed += n as u64;
             }
             // Fade in whatever comes after a jump.
-            gain = 0.0;
+            self.gain = 0.0;
+            self.tail_left = 0;
         }
-        let paused = shared.paused.load(Ordering::Relaxed);
-        let target = if paused { 0.0 } else { f32::from_bits(shared.gain.load(Ordering::Relaxed)) };
+        let paused = self.shared.paused.load(Ordering::Relaxed);
+        let target = if paused { 0.0 } else { f32::from_bits(self.shared.gain.load(Ordering::Relaxed)) };
         let mut filled = 0;
-        if !(paused && gain == 0.0) {
-            let n = out.len().min(cons.slots()) / channels * channels;
-            if let Ok(chunk) = cons.read_chunk(n) {
+        if !(paused && self.gain == 0.0) {
+            let n = out.len().min(self.cons.slots()) / ch * ch;
+            if let Ok(chunk) = self.cons.read_chunk(n) {
                 let (a, b) = chunk.as_slices();
                 for (i, (o, &s)) in out.iter_mut().zip(a.iter().chain(b)).enumerate() {
-                    if i % channels == 0 {
-                        gain = if gain < target { (gain + step).min(target) } else { (gain - step).max(target) };
+                    let c = i % ch;
+                    if c == 0 {
+                        let g = self.gain;
+                        self.gain = if g < target { (g + self.step).min(target) } else { (g - self.step).max(target) };
                     }
-                    *o = T::from_sample(s * gain);
+                    let v = s * self.gain;
+                    if c < TAIL_CH {
+                        self.tail[c] = v;
+                    }
+                    *o = T::from_sample(v);
                 }
                 chunk.commit_all();
-                consumed += n as u64;
+                self.consumed += n as u64;
                 filled = n;
             }
         }
-        for o in &mut out[filled..] {
-            *o = T::EQUILIBRIUM;
+        if filled > 0 {
+            self.dry = false;
         }
-        shared.consumed.store(consumed, Ordering::Release);
+        if filled < out.len() && !self.dry {
+            // Ran dry while playing: fade the last frame out, and fade back in
+            // when audio returns.
+            self.dry = true;
+            self.tail_left = self.ramp_frames;
+            self.gain = 0.0;
+        }
+        for (i, o) in out[filled..].iter_mut().enumerate() {
+            let c = i % ch;
+            let v = if self.tail_left > 0 && c < TAIL_CH {
+                self.tail[c] * self.tail_left as f32 / self.ramp_frames as f32
+            } else {
+                0.0
+            };
+            if c == ch - 1 && self.tail_left > 0 {
+                self.tail_left -= 1;
+            }
+            *o = T::from_sample(v);
+        }
+        self.shared.consumed.store(self.consumed, Ordering::Release);
     }
 }
 
@@ -276,6 +367,8 @@ pub struct Source {
     decoder: Box<dyn Decoder>,
     track_id: u32,
     pub rate: u32,
+    /// Speaker layout of the last decoded buffer.
+    layout: Channels,
     time_base: Option<TimeBase>,
     /// After a seek: drop decoded audio before this timestamp.
     skip_to: Option<u64>,
@@ -324,6 +417,7 @@ impl Source {
         let mut src = Source {
             track_id: track.id,
             rate: track.codec_params.sample_rate.unwrap_or(0),
+            layout: track.codec_params.channels.unwrap_or(Channels::empty()),
             time_base: track.codec_params.time_base,
             format,
             decoder,
@@ -370,9 +464,11 @@ impl Source {
         loop {
             let packet = match self.format.next_packet() {
                 Ok(p) => p,
+                // A chained stream starts here (see `follow_chain`).
+                Err(SymError::ResetRequired) if self.follow_chain() => continue,
                 Err(_) => return None, // end of stream, or unreadable from here on
             };
-            if packet.track_id() != self.track_id {
+            if packet.track_id() != self.track_id && !self.follow_chain() {
                 continue;
             }
             let decoded = match self.decoder.decode(&packet) {
@@ -381,6 +477,7 @@ impl Source {
                 Err(_) => return None,
             };
             let spec = *decoded.spec();
+            self.layout = spec.channels;
             let frames = decoded.frames();
             if frames == 0 {
                 continue;
@@ -417,6 +514,29 @@ impl Source {
     }
 }
 
+impl Source {
+    /// Chained streams (Ogg files joined end to end, as some recordings and
+    /// radio captures are) start over with new track ids. When the track
+    /// being played is gone, carry on with the new stream's audio track
+    /// instead of skipping the rest of the file.
+    fn follow_chain(&mut self) -> bool {
+        let tracks = self.format.tracks();
+        if tracks.iter().any(|t| t.id == self.track_id) {
+            return false; // another track of a multi-track file
+        }
+        let Some(t) = tracks.iter().find(|t| t.codec_params.codec != CODEC_TYPE_NULL) else { return false };
+        let Ok(decoder) = symphonia::default::get_codecs().make(&t.codec_params, &DecoderOptions::default()) else {
+            return false;
+        };
+        eprintln!("kaseki: chained stream continues");
+        self.track_id = t.id;
+        self.time_base = t.codec_params.time_base;
+        self.decoder = decoder;
+        self.skip_to = None;
+        true
+    }
+}
+
 /// Timestamp units to frames.
 fn ts_frames(time_base: Option<TimeBase>, rate: u32, ts: u64) -> u64 {
     match time_base {
@@ -427,18 +547,88 @@ fn ts_frames(time_base: Option<TimeBase>, rate: u32, ts: u64) -> u64 {
     }
 }
 
-/// Copy interleaved audio from `in_ch` to `out_ch` channels.
-fn map_channels(input: &[f32], in_ch: usize, out_ch: usize, out: &mut Vec<f32>) {
+/// For folding surround down to stereo: how much of each input channel goes
+/// to the left and right outputs. Centre channels go to both and side and rear
+/// channels to their own side, at -3 dB; LFE is left out, as most downmixes
+/// do. Scaled so that full-scale audio on every channel can't clip.
+fn stereo_fold(layout: Channels, in_ch: usize) -> Vec<[f32; 2]> {
+    const H: f32 = std::f32::consts::FRAC_1_SQRT_2;
+    let left = Channels::FRONT_LEFT_CENTRE
+        | Channels::FRONT_LEFT_WIDE
+        | Channels::FRONT_LEFT_HIGH
+        | Channels::SIDE_LEFT
+        | Channels::REAR_LEFT
+        | Channels::REAR_LEFT_CENTRE
+        | Channels::TOP_FRONT_LEFT
+        | Channels::TOP_REAR_LEFT;
+    let right = Channels::FRONT_RIGHT_CENTRE
+        | Channels::FRONT_RIGHT_WIDE
+        | Channels::FRONT_RIGHT_HIGH
+        | Channels::SIDE_RIGHT
+        | Channels::REAR_RIGHT
+        | Channels::REAR_RIGHT_CENTRE
+        | Channels::TOP_FRONT_RIGHT
+        | Channels::TOP_REAR_RIGHT;
+    let mut w: Vec<[f32; 2]> = if layout.count() == in_ch {
+        layout
+            .iter()
+            .map(|c| {
+                if c == Channels::FRONT_LEFT {
+                    [1.0, 0.0]
+                } else if c == Channels::FRONT_RIGHT {
+                    [0.0, 1.0]
+                } else if c.intersects(Channels::LFE1 | Channels::LFE2) {
+                    [0.0, 0.0]
+                } else if left.contains(c) {
+                    [H, 0.0]
+                } else if right.contains(c) {
+                    [0.0, H]
+                } else {
+                    [H, H] // centres
+                }
+            })
+            .collect()
+    } else {
+        // Layout unknown: keep the first two channels as left and right.
+        (0..in_ch).map(|i| [(i == 0) as u8 as f32, (i == 1) as u8 as f32]).collect()
+    };
+    let peak = w.iter().map(|x| x[0]).sum::<f32>().max(w.iter().map(|x| x[1]).sum());
+    if peak > 1.0 {
+        for x in &mut w {
+            x[0] /= peak;
+            x[1] /= peak;
+        }
+    }
+    w
+}
+
+/// Copy interleaved audio from `in_ch` to `out_ch` channels. `fold` (from
+/// `stereo_fold`) mixes surround down for stereo and mono outputs.
+fn map_channels(input: &[f32], in_ch: usize, out_ch: usize, fold: &[[f32; 2]], out: &mut Vec<f32>) {
     if in_ch == out_ch {
         out.extend_from_slice(input);
     } else if in_ch == 1 {
         for &s in input {
             out.extend(std::iter::repeat_n(s, out_ch));
         }
+    } else if out_ch <= 2 && fold.len() == in_ch {
+        for f in input.chunks_exact(in_ch) {
+            let (mut l, mut r) = (0.0, 0.0);
+            for (s, w) in f.iter().zip(fold) {
+                l += s * w[0];
+                r += s * w[1];
+            }
+            if out_ch == 2 {
+                out.extend([l, r]);
+            } else {
+                out.push((l + r) / 2.0);
+            }
+        }
     } else if out_ch == 1 {
         out.extend(input.chunks_exact(in_ch).map(|f| f.iter().sum::<f32>() / in_ch as f32));
     } else {
-        // Keep the front left/right (and whatever else fits); drop the rest.
+        // More channels than a stereo device but fewer than the file: keep
+        // the ones that line up; drop the rest.
         for f in input.chunks_exact(in_ch) {
             out.extend((0..out_ch).map(|c| f.get(c).copied().unwrap_or(0.0)));
         }
@@ -545,6 +735,9 @@ impl Rs {
 struct Chain {
     in_rate: u32,
     in_ch: usize,
+    in_layout: Channels,
+    /// Surround fold-down weights (empty when not needed).
+    fold: Vec<[f32; 2]>,
     out_ch: usize,
     ratio: f64,
     rs: Option<Rs>,
@@ -556,7 +749,7 @@ struct Chain {
 }
 
 impl Chain {
-    fn new(in_rate: u32, in_ch: usize, out_rate: u32, out_ch: usize, base: u64) -> Chain {
+    fn new(in_rate: u32, in_ch: usize, in_layout: Channels, out_rate: u32, out_ch: usize, base: u64) -> Chain {
         let rs = if in_rate == out_rate {
             None
         } else {
@@ -569,16 +762,17 @@ impl Chain {
             }
         };
         let ratio = rs.as_ref().map_or(1.0, |r| r.ratio);
-        Chain { in_rate, in_ch, out_ch, ratio, rs, base, in_total: 0, scratch: Vec::new() }
+        let fold = if in_ch > 2 && out_ch <= 2 { stereo_fold(in_layout, in_ch) } else { Vec::new() };
+        Chain { in_rate, in_ch, in_layout, fold, out_ch, ratio, rs, base, in_total: 0, scratch: Vec::new() }
     }
 
     fn push(&mut self, data: &[f32], out: &mut Vec<f32>) {
         self.in_total += (data.len() / self.in_ch) as u64;
         match &mut self.rs {
-            None => map_channels(data, self.in_ch, self.out_ch, out),
+            None => map_channels(data, self.in_ch, self.out_ch, &self.fold, out),
             Some(rs) => {
                 self.scratch.clear();
-                map_channels(data, self.in_ch, self.out_ch, &mut self.scratch);
+                map_channels(data, self.in_ch, self.out_ch, &self.fold, &mut self.scratch);
                 rs.push(&self.scratch, out);
             }
         }
@@ -812,16 +1006,17 @@ impl Dec {
             self.track_ended();
             return;
         };
+        let layout = cur.source.layout;
         let (out_rate, out_ch) = match &self.out {
             Some(o) => (o.rate, o.channels),
             None => return,
         };
-        if self.chain.as_ref().is_some_and(|c| c.in_rate != rate || c.in_ch != ch) {
+        if self.chain.as_ref().is_some_and(|c| c.in_rate != rate || c.in_ch != ch || c.in_layout != layout) {
             // The format changed mid-file: finish the old chain, start a new one.
             self.finish_chain();
         }
         let base = self.next_at();
-        let chain = self.chain.get_or_insert_with(|| Chain::new(rate, ch, out_rate, out_ch, base));
+        let chain = self.chain.get_or_insert_with(|| Chain::new(rate, ch, layout, out_rate, out_ch, base));
         chain.push(&data, &mut self.pending);
     }
 
@@ -1225,13 +1420,172 @@ pub(crate) mod tests {
     #[test]
     fn maps_channels() {
         let mut out = Vec::new();
-        map_channels(&[0.5, 0.25], 1, 2, &mut out);
+        map_channels(&[0.5, 0.25], 1, 2, &[], &mut out);
         assert_eq!(out, vec![0.5, 0.5, 0.25, 0.25]);
         out.clear();
-        map_channels(&[0.5, 0.25], 2, 1, &mut out);
+        map_channels(&[0.5, 0.25], 2, 1, &[], &mut out);
         assert_eq!(out, vec![0.375]);
+    }
+
+    fn surround_51() -> Channels {
+        Channels::FRONT_LEFT
+            | Channels::FRONT_RIGHT
+            | Channels::FRONT_CENTRE
+            | Channels::LFE1
+            | Channels::SIDE_LEFT
+            | Channels::SIDE_RIGHT
+    }
+
+    #[test]
+    fn surround_folds_down_with_the_centre_in_both_sides() {
+        let fold = stereo_fold(surround_51(), 6);
+        let mut out = Vec::new();
+        // Only the centre channel (vocals, usually) has sound.
+        map_channels(&[0.0, 0.0, 0.8, 0.0, 0.0, 0.0], 6, 2, &fold, &mut out);
+        assert!(out[0] > 0.2 && (out[0] - out[1]).abs() < 1e-6, "{out:?}");
+        // Left-side channels stay on the left; LFE is left out.
         out.clear();
-        map_channels(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], 6, 2, &mut out);
+        map_channels(&[0.5, 0.0, 0.0, 0.9, 0.5, 0.0], 6, 2, &fold, &mut out);
+        assert!(out[0] > 0.0 && out[1] == 0.0, "{out:?}");
+        // Every channel at full scale still can't clip.
+        out.clear();
+        map_channels(&[1.0; 6], 6, 2, &fold, &mut out);
+        assert!(out.iter().all(|&s| s <= 1.0 + 1e-6), "{out:?}");
+        // Mono output gets the same fold, averaged.
+        out.clear();
+        map_channels(&[0.0, 0.0, 0.8, 0.0, 0.0, 0.0], 6, 1, &fold, &mut out);
+        assert!(out[0] > 0.2);
+    }
+
+    #[test]
+    fn unknown_surround_layout_keeps_front_left_and_right() {
+        let fold = stereo_fold(Channels::empty(), 6);
+        let mut out = Vec::new();
+        map_channels(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], 6, 2, &fold, &mut out);
         assert_eq!(out, vec![1.0, 2.0]);
+    }
+
+    #[test]
+    fn picks_the_best_output_rate() {
+        // A built-in output offering 44.1/48/88.2/96 kHz, default 48 kHz.
+        let jack = [(44100, 44100), (48000, 48000), (88200, 88200), (96000, 96000)];
+        assert_eq!(pick_rate(&jack, 44100, 48000), 44100);
+        assert_eq!(pick_rate(&jack, 192000, 48000), 96000);
+        assert_eq!(pick_rate(&jack, 176400, 48000), 88200);
+        assert_eq!(pick_rate(&jack, 22050, 48000), 44100);
+        // Nothing related: the highest common rate up to the file's.
+        let fixed = [(44100, 44100), (48000, 48000), (96000, 96000)];
+        assert_eq!(pick_rate(&fixed, 50000, 44100), 48000);
+        // A device with a continuous range just runs at the file's rate.
+        assert_eq!(pick_rate(&[(8000, 192000)], 50000, 48000), 50000);
+        // Bluetooth headphones that only do 48 kHz.
+        assert_eq!(pick_rate(&[(48000, 48000)], 192000, 48000), 48000);
+        assert_eq!(pick_rate(&[], 44100, 48000), 48000);
+    }
+
+    fn feeder(rate: u32, cap: usize) -> (Feeder, Producer<f32>, Arc<Shared>) {
+        let (prod, cons) = RingBuffer::new(cap);
+        let shared = Arc::new(Shared::new(1.0, false));
+        (Feeder::new(cons, shared.clone(), 2, rate), prod, shared)
+    }
+
+    #[test]
+    fn an_underrun_fades_out_instead_of_clicking() {
+        let (mut f, mut prod, _) = feeder(1000, 4096);
+        // 100 frames of a steady 0.5, enough to finish the 10-frame fade-in.
+        for _ in 0..200 {
+            prod.push(0.5).unwrap();
+        }
+        let mut out = vec![0f32; 240]; // asks for 120 frames: 20 more than there are
+        f.fill(&mut out);
+        assert!((out[198] - 0.5).abs() < 1e-6, "last real frame {}", out[198]);
+        // The shortfall ramps down from the last value, then stays silent.
+        let after: Vec<f32> = out[200..].chunks_exact(2).map(|c| c[0]).collect();
+        assert!(after[0] > 0.4, "first faded frame {}", after[0]);
+        assert!(after.windows(2).all(|w| w[1] <= w[0]), "{after:?}");
+        assert_eq!(*after.last().unwrap(), 0.0);
+        // When audio returns it fades back in rather than jumping.
+        for _ in 0..200 {
+            prod.push(0.5).unwrap();
+        }
+        let mut out = vec![0f32; 200];
+        f.fill(&mut out);
+        assert!(out[0] < 0.1, "should fade back in, got {}", out[0]);
+        assert!((out[198] - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_pause_does_not_count_as_an_underrun() {
+        let (mut f, mut prod, shared) = feeder(1000, 4096);
+        for _ in 0..400 {
+            prod.push(0.5).unwrap();
+        }
+        let mut out = vec![0f32; 100];
+        f.fill(&mut out);
+        shared.set_paused(true);
+        let mut out = vec![0f32; 100];
+        f.fill(&mut out); // ramps down over 10 frames, then silence
+        let mut out = vec![0f32; 100];
+        f.fill(&mut out);
+        assert!(out.iter().all(|&s| s == 0.0));
+        assert!(prod.slots() < 4096, "paused audio stays buffered");
+    }
+
+    #[test]
+    fn a_surround_file_keeps_its_centre_channel_in_stereo() {
+        // A 5.1 FLAC with a tone only in the centre channel.
+        let path = tmp("centre51.flac");
+        let ok = std::process::Command::new("ffmpeg")
+            .args(["-y", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=1"])
+            .args(["-af", "pan=5.1|FC=c0", "-c:a", "flac"])
+            .arg(&path)
+            .status()
+            .is_ok_and(|s| s.success());
+        if !ok {
+            eprintln!("ffmpeg not available; skipping");
+            return;
+        }
+        let mut rig = Rig::new(48000, 48000);
+        rig.start(1, 1, &path, 0.0);
+        rig.run_to_end(1);
+        let peak = |c: usize| rig.got.chunks_exact(2).map(|f| f[c].abs()).fold(0.0f32, f32::max);
+        // ffmpeg's tone peaks at 1/8; the centre goes to each side at -3 dB,
+        // scaled by 1 / (1 + 2 × 0.707) so a full 5.1 mix can't clip.
+        let h = std::f32::consts::FRAC_1_SQRT_2;
+        let want = 0.125 * h / (1.0 + 2.0 * h);
+        for c in 0..2 {
+            assert!((peak(c) - want).abs() < 0.002, "channel {c}: {} (want {want})", peak(c));
+        }
+    }
+
+    /// A one-second Ogg Vorbis file from ffmpeg, or `None` when ffmpeg isn't installed.
+    fn ogg(name: &str, freq: u32) -> Option<PathBuf> {
+        let path = tmp(name);
+        let ok = std::process::Command::new("ffmpeg")
+            .args(["-y", "-loglevel", "error", "-f", "lavfi", "-i"])
+            .arg(format!("sine=frequency={freq}:sample_rate=44100:duration=1"))
+            // ffmpeg's built-in Vorbis encoder (builds without libvorbis have only this one).
+            .args(["-ac", "2", "-c:a", "vorbis", "-strict", "-2"])
+            .arg(&path)
+            .status()
+            .is_ok_and(|s| s.success());
+        ok.then_some(path)
+    }
+
+    #[test]
+    fn chained_ogg_streams_play_to_the_end() {
+        let (Some(a), Some(b)) = (ogg("chain-a.ogg", 440), ogg("chain-b.ogg", 880)) else {
+            eprintln!("ffmpeg not available; skipping");
+            return;
+        };
+        let joined = tmp("chained.ogg");
+        let mut bytes = std::fs::read(&a).unwrap();
+        bytes.extend(std::fs::read(&b).unwrap());
+        std::fs::write(&joined, bytes).unwrap();
+        let mut rig = Rig::new(44100, 44100);
+        rig.start(1, 1, &joined, 0.0);
+        rig.run_to_end(1);
+        let secs = rig.got.len() as f64 / 2.0 / 44100.0;
+        assert!((secs - 2.0).abs() < 0.05, "played {secs:.3} s of 2 s");
     }
 }
