@@ -237,6 +237,45 @@ body {
   color: var(--muted);
 }
 
+.badge.new {
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+.list-mode-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 14px 0 4px;
+}
+
+.list-mode {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.list-filter {
+  margin: 2px 0 4px;
+  padding: 3px 8px;
+  font-size: 12px;
+}
+
+.nav-sub {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.group-item {
+  padding-left: 10px;
+}
+
 .nav-empty {
   padding: 4px 8px;
   font-size: 12px;
@@ -251,6 +290,64 @@ body {
 .sidebar-footer {
   padding: 8px;
   border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* ---------- update bulb ---------- */
+
+.bulb {
+  position: relative;
+  flex-shrink: 0;
+  width: 30px;
+  height: 28px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 15px;
+  filter: grayscale(1);
+  opacity: 0.45;
+}
+
+.bulb:hover {
+  background: var(--hover);
+  opacity: 0.8;
+}
+
+.bulb.behind,
+.bulb.diverged {
+  filter: none;
+  opacity: 1;
+}
+
+.bulb .count {
+  position: absolute;
+  top: 0;
+  right: 0;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #111;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 15px;
+}
+
+.update-cmd {
+  display: block;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  user-select: all;
+  -webkit-user-select: all;
+  word-break: break-all;
 }
 
 .icon-btn {
@@ -588,6 +685,45 @@ body.resizing {
   margin-bottom: 10px;
 }
 
+.np-art:not(.none) {
+  cursor: zoom-in;
+}
+
+/* ---------- artwork viewer ---------- */
+
+.art-viewer {
+  background: rgba(0, 0, 0, 0.82);
+  flex-direction: column;
+  gap: 14px;
+  cursor: zoom-out;
+}
+
+.art-viewer img {
+  max-width: min(88vw, 900px);
+  max-height: 76vh;
+  border-radius: 10px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+  object-fit: contain;
+  cursor: default;
+}
+
+.art-viewer .caption {
+  color: #e7e7e9;
+  text-align: center;
+  font-size: 13px;
+  max-width: 80vw;
+}
+
+.art-viewer .caption .muted {
+  color: #a0a1a8;
+}
+
+.art-viewer .actions {
+  display: flex;
+  gap: 8px;
+  cursor: default;
+}
+
 .np-art.none {
   content: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text x='50' y='62' font-size='40' text-anchor='middle' fill='%23888' opacity='0.4'>♫</text></svg>");
 }
@@ -624,6 +760,84 @@ body.resizing {
   overflow-y: auto;
   min-height: 0;
   flex: 1;
+}
+
+.np-tabs {
+  display: flex;
+  gap: 2px;
+  margin-top: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.np-tab {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 4px 8px 6px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+
+.np-tab:hover {
+  color: var(--text);
+}
+
+.np-tab.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+.np-lyrics {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px 2px 40px;
+  line-height: 1.45;
+}
+
+.lyric {
+  padding: 2px 4px;
+  border-radius: 4px;
+  white-space: pre-wrap;
+}
+
+.np-lyrics.synced .lyric {
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 600;
+  padding: 4px;
+  transition: color 0.2s;
+}
+
+.np-lyrics.synced .lyric.now {
+  color: var(--text);
+}
+
+.lyric.timed {
+  cursor: pointer;
+}
+
+.lyric.timed:hover {
+  background: var(--hover);
+}
+
+.lyric.gap {
+  min-height: 0.8em;
+}
+
+.np-lyrics-msg {
+  padding: 16px 4px;
+}
+
+.np-lyrics-src {
+  font-size: 11px;
+  margin-top: 14px;
+  padding: 0 4px;
 }
 
 .np-next-item {
@@ -715,14 +929,23 @@ body.resizing {
 }
 
 .pb-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
   background: transparent;
   border: none;
-  font-size: 16px;
   width: 34px;
   height: 30px;
   border-radius: 6px;
   cursor: pointer;
   color: var(--text);
+}
+
+.pb-btn .icon {
+  width: 20px;
+  height: 20px;
+  display: block;
 }
 
 .pb-btn:hover {
@@ -735,7 +958,16 @@ body.resizing {
   border-radius: 50%;
   background: var(--accent);
   color: #111;
-  font-size: 15px;
+}
+
+.pb-btn.play .icon {
+  width: 18px;
+  height: 18px;
+}
+
+/* The triangle's visual centre is left of its box; nudge it. */
+.pb-btn.play .icon-play {
+  transform: translateX(1px);
 }
 
 .pb-btn.play:hover {
@@ -743,8 +975,12 @@ body.resizing {
 }
 
 .pb-btn.small {
-  font-size: 14px;
   color: var(--muted);
+}
+
+.pb-btn.small .icon {
+  width: 18px;
+  height: 18px;
 }
 
 .pb-btn.on {

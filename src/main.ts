@@ -1,5 +1,6 @@
 import { listen } from "@tauri-apps/api/event";
 import { api, QueueState, Tick } from "./api";
+import { perfEnabled, runBenchmark } from "./perf";
 import { store } from "./store";
 import { $, modKey, toast } from "./util";
 import { run } from "./ui/actions";
@@ -20,6 +21,7 @@ interface ScanFinished {
   addedOrUpdated: number;
   removed: number;
   errors: number;
+  inboxed: number;
 }
 interface Played {
   id: number;
@@ -28,6 +30,7 @@ interface Played {
 }
 
 async function main() {
+  const mainStart = performance.now();
   store.settings = await api.getSettings();
   applyTheme();
   applyLayout();
@@ -70,9 +73,12 @@ async function main() {
   });
   await listen<ScanFinished>("scan-finished", (e) => {
     sidebar.setStatus("");
-    const { addedOrUpdated, removed, errors } = e.payload;
+    const { addedOrUpdated, removed, errors, inboxed } = e.payload;
     if (addedOrUpdated || removed) {
-      toast(`Library updated: ${addedOrUpdated} added or changed, ${removed} removed${errors ? `, ${errors} unreadable` : ""}`);
+      toast(
+        `Library updated: ${addedOrUpdated} added or changed, ${removed} removed${errors ? `, ${errors} unreadable` : ""}` +
+          (inboxed ? `. ${inboxed} new in Inbox.` : ""),
+      );
     }
     run(() => store.loadTracks(true));
   });
@@ -83,7 +89,9 @@ async function main() {
 
   await store.loadPlaylists();
   await store.loadTracks();
+  const loaded = performance.now();
   await api.cmd("emit");
+  if (await perfEnabled()) void runBenchmark(mainStart, loaded);
 
   // Pick up files changed while the app was closed.
   const folders = await api.getFolders();

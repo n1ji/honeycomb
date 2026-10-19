@@ -50,12 +50,23 @@ export function openTrackMenu(x: number, y: number) {
       action: () => run(() => revealItemInDir(store.tracks.get(ids[0])!.path)),
     },
   ];
+  if (view.kind === "inbox" || ids.some((id) => store.tracks.get(id)?.inbox)) {
+    items.push(SEP, { label: "Remove from Inbox", action: () => run(() => clearInbox(ids)) });
+  }
   if (view.kind === "queue") {
     items.push(SEP, { label: "Remove from queue", action: () => removeSelected() });
   } else if (pl?.kind === "manual") {
     items.push(SEP, { label: "Remove from playlist", action: () => removeSelected() });
   }
   openMenu(x, y, items);
+}
+
+/** Mark tracks as reviewed (all inbox tracks when `ids` is null). */
+export async function clearInbox(ids: number[] | null = null) {
+  await api.clearInbox(ids);
+  const done = ids ?? [...store.tracks.values()].filter((t) => t.inbox).map((t) => t.id);
+  store.updateTracks(done.map((id) => ({ ...store.tracks.get(id)!, inbox: false })));
+  if (store.view.kind === "inbox") await store.refreshView("keepScroll");
 }
 
 async function setRating(ids: number[], rating: number) {

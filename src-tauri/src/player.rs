@@ -9,10 +9,13 @@ use std::collections::VecDeque;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rand::seq::SliceRandom;
+use rodio::cpal::traits::{DeviceTrait, HostTrait};
 use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
@@ -23,6 +26,8 @@ use crate::models::now_secs;
 /// How long before the end of a track the next one is queued in the sink.
 const PRELOAD_SECS: f64 = 2.0;
 const TICK: Duration = Duration::from_millis(200);
+/// How often to check whether the system's default output device changed.
+const DEVICE_CHECK: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone)]
 pub struct QItem {
@@ -50,6 +55,8 @@ pub enum Cmd {
     Next,
     Prev,
     Seek(f64),
+    /// Seek relative to the current position, in seconds.
+    SeekBy(f64),
     Volume(f32),
     Shuffle(bool),
     Repeat(Repeat),
@@ -125,16 +132,54 @@ struct Engine {
     volume: f32,
     next_uid: u64,
     error: Option<String>,
+    /// Name of the device the stream plays on.
+    device: Option<String>,
+    /// Set from the audio callback thread when the stream fails (device gone).
+    stream_failed: Arc<AtomicBool>,
+    last_device_check: Instant,
+    /// Where to pick up again once an output device is available.
+    resume: Option<(usize, f64)>,
+    /// (playing item uid, playing) last shown in the OS media controls.
+    media_shown: Option<(u64, bool)>,
+    /// Position jumped; the OS controls need the new position.
+    media_dirty: bool,
+    /// Queue index last shown, kept after playback stops so the OS still sees a paused track.
+    media_last_index: Option<usize>,
+}
+
+fn default_device_name() -> Option<String> {
+    rodio::cpal::default_host().default_output_device().and_then(|d| d.name().ok())
+}
+
+fn device_exists(name: &str) -> bool {
+    rodio::cpal::default_host()
+        .output_devices()
+        .map(|mut ds| ds.any(|d| d.name().ok().as_deref() == Some(name)))
+        .unwrap_or(false)
+}
+
+/// Open the system's default output. Stream errors only raise `failed`;
+/// the audio thread notices on its next tick and reopens.
+fn open_output(failed: &Arc<AtomicBool>) -> Result<(OutputStream, Option<String>), String> {
+    failed.store(false, Ordering::SeqCst);
+    let flag = failed.clone();
+    let builder = OutputStreamBuilder::from_default_device()
+        .map_err(|e| format!("No audio output device: {e}"))?
+        .with_error_callback(move |e| {
+            eprintln!("audio stream error: {e}");
+            flag.store(true, Ordering::SeqCst);
+        });
+    let mut stream = builder.open_stream_or_fallback().map_err(|e| format!("No audio output device: {e}"))?;
+    stream.log_on_drop(false);
+    Ok((stream, default_device_name()))
 }
 
 impl Engine {
     fn new(app: AppHandle, db_path: PathBuf, volume: f32) -> Self {
-        let (stream, error) = match OutputStreamBuilder::open_default_stream() {
-            Ok(mut s) => {
-                s.log_on_drop(false);
-                (Some(s), None)
-            }
-            Err(e) => (None, Some(format!("No audio output device: {e}"))),
+        let stream_failed = Arc::new(AtomicBool::new(false));
+        let (stream, device, error) = match open_output(&stream_failed) {
+            Ok((s, d)) => (Some(s), d, None),
+            Err(e) => (None, None, Some(e)),
         };
         Engine {
             app,
@@ -149,6 +194,13 @@ impl Engine {
             volume,
             next_uid: 1,
             error,
+            device,
+            stream_failed,
+            last_device_check: Instant::now(),
+            resume: None,
+            media_shown: None,
+            media_dirty: false,
+            media_last_index: None,
         }
     }
 
@@ -231,7 +283,15 @@ impl Engine {
                     }
                 }
             }
-            Cmd::Seek(secs) => self.seek(secs),
+            Cmd::Seek(secs) => {
+                self.seek(secs);
+                self.media_dirty = true;
+            }
+            Cmd::SeekBy(delta) => {
+                let pos = self.position();
+                self.seek(pos + delta);
+                self.media_dirty = true;
+            }
             Cmd::Volume(v) => {
                 self.volume = v.clamp(0.0, 1.0);
                 if let Some(s) = &self.sink {
@@ -262,6 +322,10 @@ impl Engine {
                 idxs.sort_unstable();
                 idxs.dedup();
                 let current_uid = self.current.map(|c| self.queue[c].uid);
+                let removed_before = self
+                    .current
+                    .map(|c| idxs.iter().filter(|&&i| i < c && i < self.queue.len()).count())
+                    .unwrap_or(0);
                 let mut removed_uids = Vec::new();
                 for i in idxs.into_iter().rev() {
                     if i < self.queue.len() {
@@ -272,7 +336,19 @@ impl Engine {
                     orig.retain(|q| !removed_uids.contains(&q.uid));
                 }
                 match current_uid {
-                    Some(uid) if removed_uids.contains(&uid) => self.stop(),
+                    Some(uid) if removed_uids.contains(&uid) => {
+                        // Carry on with the first track after it that's still queued.
+                        let old = self.current.unwrap_or(0);
+                        let next = old - removed_before;
+                        let paused = self.is_paused();
+                        if next < self.queue.len() {
+                            self.restart_at(next, 0.0, paused);
+                        } else if self.repeat != Repeat::Off && !self.queue.is_empty() {
+                            self.restart_at(0, 0.0, paused);
+                        } else {
+                            self.stop();
+                        }
+                    }
                     Some(uid) => self.current = self.queue.iter().position(|q| q.uid == uid),
                     None => {}
                 }
@@ -283,6 +359,83 @@ impl Engine {
                 self.stop();
             }
             Cmd::Emit => {}
+        }
+        self.fix_preload();
+        self.emit_queue();
+    }
+
+    fn is_paused(&self) -> bool {
+        self.sink.as_ref().is_some_and(|s| s.is_paused())
+    }
+
+    /// Start queue[index] at `pos` seconds, optionally paused.
+    fn restart_at(&mut self, index: usize, pos: f64, paused: bool) {
+        self.start(index);
+        if pos > 0.0 {
+            self.seek(pos);
+        }
+        if paused {
+            if let Some(s) = &self.sink {
+                s.pause();
+            }
+        }
+    }
+
+    /// The next track is appended to the sink a moment early for gapless
+    /// playback. If the queue, shuffle or repeat changed since, that track may
+    /// no longer be next; rebuild the sink at the current position so it isn't played.
+    fn fix_preload(&mut self) {
+        let Some(&preloaded) = self.in_sink.get(1) else { return };
+        let want = self.next_index().map(|n| self.queue[n].uid);
+        if want != Some(preloaded) {
+            if let Some(cur) = self.current {
+                let (pos, paused) = (self.position(), self.is_paused());
+                self.restart_at(cur, pos, paused);
+            }
+        }
+    }
+
+    /// Reopen the output when the stream failed or the system's default device
+    /// changed (headphones plugged in or out). If the old device disappeared,
+    /// playback pauses rather than jumping to the speakers.
+    fn check_device(&mut self) {
+        let failed = self.stream_failed.load(Ordering::SeqCst);
+        if !failed && self.last_device_check.elapsed() < DEVICE_CHECK {
+            return;
+        }
+        self.last_device_check = Instant::now();
+        let now = default_device_name();
+        let changed = now.is_some() && now != self.device;
+        if !failed && !changed && self.stream.is_some() {
+            return;
+        }
+        let gone = failed || self.device.as_deref().is_some_and(|d| !device_exists(d));
+        let state = match (self.current, self.resume) {
+            (Some(cur), _) if self.sink.is_some() => Some((cur, self.position(), self.is_paused() || gone)),
+            (_, Some((cur, pos))) => Some((cur, pos, true)),
+            _ => None,
+        };
+        self.sink = None;
+        self.in_sink.clear();
+        self.stream = None;
+        match open_output(&self.stream_failed) {
+            Ok((stream, device)) => {
+                eprintln!("audio output: {}", device.as_deref().unwrap_or("default device"));
+                self.stream = Some(stream);
+                self.device = device;
+                self.error = None;
+                self.resume = None;
+                if let Some((cur, pos, paused)) = state {
+                    if cur < self.queue.len() {
+                        self.restart_at(cur, pos, paused);
+                    }
+                }
+            }
+            Err(e) => {
+                self.error = Some(e);
+                self.device = None;
+                self.resume = state.map(|(cur, pos, _)| (cur, pos));
+            }
         }
         self.emit_queue();
     }
@@ -413,7 +566,9 @@ impl Engine {
     }
 
     fn tick(&mut self) {
+        self.check_device();
         let Some(sink) = &self.sink else {
+            self.sync_media();
             self.emit_tick();
             return;
         };
@@ -441,6 +596,7 @@ impl Engine {
             }
             self.emit_queue();
         }
+        self.sync_media();
 
         // Preload the next track for gapless playback.
         if let (Some(sink), Some(cur)) = (&self.sink, self.current) {
@@ -458,6 +614,50 @@ impl Engine {
             }
         }
         self.emit_tick();
+    }
+
+    /// Tell the OS media controls about a new track, play/pause, or a seek.
+    /// While anything is queued, an idle player reports "paused", never
+    /// "stopped": macOS treats a stopped app as done and hands the media keys
+    /// to another app (e.g. a browser tab).
+    fn sync_media(&mut self) {
+        let active = self.sink.is_some();
+        let item = self
+            .current
+            .or(self.media_last_index)
+            .and_then(|c| self.queue.get(c))
+            .or_else(|| self.queue.first());
+        if active {
+            self.media_last_index = self.current;
+        }
+        let playing = active && !self.is_paused();
+        let key = item.map(|q| (q.uid, playing));
+        if key == self.media_shown && !self.media_dirty {
+            return;
+        }
+        self.media_shown = key;
+        self.media_dirty = false;
+        let np = item.map(|q| {
+            let track = db::open(&self.db_path).ok().and_then(|c| db::track_by_id(&c, q.track_id).ok().flatten());
+            let (title, artist, album) = match &track {
+                Some(t) => (
+                    if t.title.is_empty() { file_stem(&q.path) } else { t.title.clone() },
+                    if t.artist.is_empty() { t.album_artist.clone() } else { t.artist.clone() },
+                    t.album.clone(),
+                ),
+                None => (file_stem(&q.path), String::new(), String::new()),
+            };
+            crate::media::NowPlaying {
+                title,
+                artist,
+                album,
+                duration: q.duration,
+                cover_url: crate::media::cover_url(&self.app, q.track_id, &q.path),
+                playing,
+                position: if active { self.position() } else { 0.0 },
+            }
+        });
+        crate::media::update(&self.app, np);
     }
 
     fn record_play(&self, track_id: i64) {
@@ -500,4 +700,8 @@ impl Engine {
             },
         );
     }
+}
+
+fn file_stem(path: &str) -> String {
+    std::path::Path::new(path).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
 }

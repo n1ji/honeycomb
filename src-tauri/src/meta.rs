@@ -95,6 +95,7 @@ pub fn read_track_with(path: &Path, has_folder_art: &dyn Fn(&Path) -> bool) -> R
         mtime: file_mtime(path),
         has_art: has_tag_art || has_folder_art(path),
         loved: false,
+        inbox: false,
     })
 }
 
@@ -225,4 +226,17 @@ pub fn write_tags(path: &Path, edit: &TagEdit) -> Result<()> {
         .save_to_path(path, WriteOptions::default())
         .with_context(|| format!("saving {}", path.display()))?;
     Ok(())
+}
+
+/// Lyrics stored in the file's tags (USLT, LYRICS, ©lyr…), if any.
+pub fn embedded_lyrics(path: &Path) -> Option<String> {
+    let tagged = lofty::read_from_path(path).ok()?;
+    tagged
+        .primary_tag()
+        .into_iter()
+        .chain(tagged.tags().iter())
+        .filter_map(|t| t.get_string(&ItemKey::Lyrics))
+        .map(str::trim)
+        .find(|s| !s.is_empty())
+        .map(str::to_string)
 }

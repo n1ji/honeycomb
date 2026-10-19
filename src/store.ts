@@ -1,6 +1,6 @@
 import { api, Playlist, QueueState, Tick, Track } from "./api";
 
-export type View = { kind: "library" } | { kind: "queue" } | { kind: "playlist"; id: number };
+export type View = { kind: "library" } | { kind: "inbox" } | { kind: "queue" } | { kind: "playlist"; id: number };
 
 export type SortKey = keyof Track;
 
@@ -87,6 +87,12 @@ class Store {
     const v = this.view;
     if (v.kind === "library") {
       this.viewIds = [...this.tracks.values()].sort(libraryOrder).map((t) => t.id);
+    } else if (v.kind === "inbox") {
+      // Newest first.
+      this.viewIds = [...this.tracks.values()]
+        .filter((t) => t.inbox)
+        .sort((a, b) => b.dateAdded - a.dateAdded || libraryOrder(a, b))
+        .map((t) => t.id);
     } else if (v.kind === "queue") {
       this.viewIds = this.queue.trackIds;
     } else {
@@ -144,6 +150,13 @@ class Store {
     }
     this.emit("visible");
     this.emit("selection");
+  }
+
+  /** Show the library narrowed to an artist, album or genre (from the sidebar). */
+  async showFiltered(filters: Partial<Filters>) {
+    if (this.view.kind !== "library") await this.setView({ kind: "library" });
+    this.filters = { genre: null, artist: null, album: null, ...filters };
+    this.recompute();
   }
 
   setFilter(key: keyof Filters, value: string | null) {

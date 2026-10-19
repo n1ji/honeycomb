@@ -72,6 +72,12 @@ async function setSetting(key: string, value: string) {
   await api.setSetting(key, value);
 }
 
+function lyricsToggle(): HTMLElement {
+  const box = h("input", { type: "checkbox", checked: store.settings.lyricsOnline !== "off" });
+  box.addEventListener("change", () => run(() => setSetting("lyricsOnline", box.checked ? "on" : "off")));
+  return h("label", { class: "check" }, box, "Look up lyrics online");
+}
+
 export async function openSettings() {
   const m = modal("Settings", { wide: true });
 
@@ -194,6 +200,13 @@ export async function openSettings() {
       }),
     ),
     h("p", { class: "muted" }, `${store.tracks.size.toLocaleString()} tracks in library. Honeycomb never moves or deletes your files.`),
+    h("h3", {}, "Lyrics"),
+    lyricsToggle(),
+    h(
+      "p",
+      { class: "muted" },
+      "Lyrics in the file or a .lrc file next to it are always used. Online lookup asks LRCLIB (lrclib.net, a free lyrics database) for the rest, sending the song's title, artist, album and length.",
+    ),
     h("h3", {}, "Appearance"),
     h("label", { class: "field inline" }, h("span", {}, "Theme"), theme),
     h("label", { class: "field inline" }, h("span", {}, "Row density"), density),

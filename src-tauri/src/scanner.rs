@@ -29,6 +29,7 @@ struct Finished {
     added_or_updated: usize,
     removed: usize,
     errors: usize,
+    inboxed: usize,
 }
 
 /// Scan every library folder on a background thread. Unchanged files (same
@@ -38,7 +39,10 @@ pub fn spawn_scan(app: AppHandle, db_path: PathBuf, scanning: Arc<AtomicBool>) {
         return;
     }
     std::thread::spawn(move || {
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| scan(&app, &db_path)));
+        let progress = |p: Progress| {
+            let _ = app.emit("scan-progress", p);
+        };
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| scan(&db_path, &progress)));
         scanning.store(false, Ordering::SeqCst);
         match result {
             Ok(Ok(f)) => {
@@ -54,10 +58,11 @@ pub fn spawn_scan(app: AppHandle, db_path: PathBuf, scanning: Arc<AtomicBool>) {
     });
 }
 
-fn scan(app: &AppHandle, db_path: &Path) -> Result<Finished> {
+fn scan(db_path: &Path, progress: &dyn Fn(Progress)) -> Result<Finished> {
     let started = std::time::Instant::now();
     let conn = db::open(db_path)?;
     let folders = db::folders(&conn)?;
+    let established: Vec<PathBuf> = db::scanned_folders(&conn)?.into_iter().map(PathBuf::from).collect();
 
     let files: Vec<PathBuf> = folders
         .iter()
@@ -87,6 +92,7 @@ fn scan(app: &AppHandle, db_path: &Path) -> Result<Finished> {
     let dir_art: Mutex<HashMap<PathBuf, bool>> = Mutex::new(HashMap::new());
     let mut changed = 0;
     let mut errors = 0;
+    let mut inboxed = 0;
 
     std::thread::scope(|s| -> Result<()> {
         let (tx, rx) = mpsc::sync_channel(256);
@@ -129,7 +135,12 @@ fn scan(app: &AppHandle, db_path: &Path) -> Result<Finished> {
             let w = std::time::Instant::now();
             match track {
                 Some(t) => {
-                    db::upsert_track(&conn, &t)?;
+                    let id = db::upsert_track(&conn, &t)?;
+                    let is_new = !known.contains_key(&t.path);
+                    if is_new && established.iter().any(|f| Path::new(&t.path).starts_with(f)) {
+                        conn.execute("UPDATE tracks SET inbox = 1 WHERE id = ?1", [id])?;
+                        inboxed += 1;
+                    }
                     changed += 1;
                 }
                 None => errors += 1,
@@ -142,7 +153,7 @@ fn scan(app: &AppHandle, db_path: &Path) -> Result<Finished> {
             }
             write_time += w.elapsed();
             if done % 25 == 0 || done == total {
-                let _ = app.emit("scan-progress", Progress { done, total, current: path });
+                progress(Progress { done, total, current: path });
             }
         }
         conn.execute_batch("COMMIT")?;
@@ -159,7 +170,79 @@ fn scan(app: &AppHandle, db_path: &Path) -> Result<Finished> {
     for p in &stale {
         conn.execute("DELETE FROM tracks WHERE path = ?1", [p])?;
     }
+    conn.execute("UPDATE folders SET scanned = 1", [])?;
     conn.execute_batch("COMMIT")?;
 
-    Ok(Finished { added_or_updated: changed, removed: stale.len(), errors })
+    Ok(Finished { added_or_updated: changed, removed: stale.len(), errors, inboxed })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A tiny valid 16-bit mono WAV (0.1 s of silence).
+    fn write_wav(path: &Path) {
+        let samples = 4410u32;
+        let data_len = samples * 2;
+        let mut b = Vec::new();
+        b.extend_from_slice(b"RIFF");
+        b.extend_from_slice(&(36 + data_len).to_le_bytes());
+        b.extend_from_slice(b"WAVEfmt ");
+        b.extend_from_slice(&16u32.to_le_bytes());
+        b.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        b.extend_from_slice(&1u16.to_le_bytes()); // mono
+        b.extend_from_slice(&44100u32.to_le_bytes());
+        b.extend_from_slice(&(44100u32 * 2).to_le_bytes());
+        b.extend_from_slice(&2u16.to_le_bytes());
+        b.extend_from_slice(&16u16.to_le_bytes());
+        b.extend_from_slice(b"data");
+        b.extend_from_slice(&data_len.to_le_bytes());
+        b.resize(b.len() + data_len as usize, 0);
+        std::fs::write(path, b).unwrap();
+    }
+
+    fn inbox_names(conn: &rusqlite::Connection) -> Vec<String> {
+        db::all_tracks(conn)
+            .unwrap()
+            .into_iter()
+            .filter(|t| t.inbox)
+            .map(|t| Path::new(&t.path).file_name().unwrap().to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn new_files_in_scanned_folders_go_to_inbox() {
+        let root = std::env::temp_dir().join(format!("hc-inbox-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (music, more) = (root.join("music"), root.join("more"));
+        std::fs::create_dir_all(&music).unwrap();
+        std::fs::create_dir_all(&more).unwrap();
+        write_wav(&music.join("old.wav"));
+        let db_path = root.join("library.db");
+        let conn = db::open(&db_path).unwrap();
+        db::migrate(&conn).unwrap();
+        let add = |f: &Path| {
+            conn.execute("INSERT INTO folders (path) VALUES (?1)", [f.to_string_lossy()]).unwrap();
+        };
+        let quiet = |_: Progress| {};
+
+        // A folder's first scan fills the library but not the inbox.
+        add(&music);
+        let f = scan(&db_path, &quiet).unwrap();
+        assert_eq!((f.added_or_updated, f.inboxed), (1, 0));
+
+        // A file that turns up later lands in the inbox; a newly added folder doesn't.
+        write_wav(&music.join("new.wav"));
+        write_wav(&more.join("other.wav"));
+        add(&more);
+        let f = scan(&db_path, &quiet).unwrap();
+        assert_eq!((f.added_or_updated, f.inboxed), (2, 1));
+        assert_eq!(inbox_names(&conn), ["new.wav"]);
+
+        // Rescanning leaves it there; nothing else is added.
+        let f = scan(&db_path, &quiet).unwrap();
+        assert_eq!((f.added_or_updated, f.inboxed), (0, 0));
+        assert_eq!(inbox_names(&conn), ["new.wav"]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

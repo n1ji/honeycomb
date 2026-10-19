@@ -30,6 +30,10 @@ walkdir = "2"
 rand = "0.8"
 plist = "1"
 unicode-normalization = "0.1"
+# System media keys and now-playing info (macOS Now Playing, MPRIS on Linux, SMTC on Windows).
+# LRCLIB lyrics lookups.
+ureq = { version = "2", features = ["json"] }
+souvlaki = { version = "0.8", default-features = false, features = ["use_zbus"] }
 
 # Optimize dependencies in dev builds: unoptimized audio decoding and tag
 # parsing are slow enough to stutter and to make library scans crawl.

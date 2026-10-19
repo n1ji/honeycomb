@@ -1,6 +1,10 @@
 import { api, artUrl, Repeat, Track } from "../api";
 import { store } from "../store";
 import { $, fmtTime, h, stars } from "../util";
+import { saveSetting } from "./layout";
+import { openArtViewer } from "./artviewer";
+import { icon, setIcon } from "./icons";
+import { mountLyrics } from "./lyrics";
 import { run } from "./actions";
 import { revealPlaying } from "./tracklist";
 
@@ -33,14 +37,14 @@ export function mountPlayerBar() {
   const art = artImg("pb-art");
   const title = h("div", { class: "pb-title" });
   const artist = h("div", { class: "pb-artist" });
-  const playBtn = h("button", { class: "pb-btn play", title: "Play/Pause (Space)", onclick: () => run(() => api.cmd("toggle")) }, "▶");
-  const shuffleBtn = h("button", { class: "pb-btn small", title: "Shuffle" }, "⇄");
-  const repeatBtn = h("button", { class: "pb-btn small", title: "Repeat" }, "↻");
+  const playBtn = h("button", { class: "pb-btn play", title: "Play/Pause (Space)", onclick: () => run(() => api.cmd("toggle")) }, icon("play"));
+  const shuffleBtn = h("button", { class: "pb-btn small", title: "Shuffle" }, icon("shuffle"));
+  const repeatBtn = h("button", { class: "pb-btn small", title: "Repeat" }, icon("repeat"));
   const pos = h("span", { class: "pb-time" }, "0:00");
   const dur = h("span", { class: "pb-time" }, "0:00");
   const seek = h("input", { type: "range", class: "seek", min: 0, max: 1000, value: 0, step: 1 });
   const volume = h("input", { type: "range", class: "volume", min: 0, max: 100, value: 80, title: "Volume" });
-  const volIcon = h("button", { class: "pb-btn small", title: "Mute" }, "🔊");
+  const volIcon = h("button", { class: "pb-btn small", title: "Mute" }, icon("volume"));
 
   root.append(
     h(
@@ -56,9 +60,9 @@ export function mountPlayerBar() {
         "div",
         { class: "pb-controls" },
         shuffleBtn,
-        h("button", { class: "pb-btn", title: "Previous", onclick: () => run(() => api.cmd("prev")) }, "⏮"),
+        h("button", { class: "pb-btn", title: "Previous", onclick: () => run(() => api.cmd("prev")) }, icon("prev")),
         playBtn,
-        h("button", { class: "pb-btn", title: "Next", onclick: () => run(() => api.cmd("next")) }, "⏭"),
+        h("button", { class: "pb-btn", title: "Next", onclick: () => run(() => api.cmd("next")) }, icon("next")),
         repeatBtn,
       ),
       h("div", { class: "pb-seek" }, pos, seek, dur),
@@ -88,7 +92,7 @@ export function mountPlayerBar() {
   let lastVolume = 0.8;
   const setVolume = (v: number) => {
     volume.value = String(Math.round(v * 100));
-    volIcon.textContent = v === 0 ? "🔇" : v < 0.5 ? "🔉" : "🔊";
+    setIcon(volIcon, v === 0 ? "mute" : v < 0.5 ? "volumeLow" : "volume");
     run(() => api.cmd("volume", v));
   };
   volume.addEventListener("input", () => setVolume(Number(volume.value) / 100));
@@ -104,18 +108,18 @@ export function mountPlayerBar() {
     const q = store.queue;
     shuffleBtn.classList.toggle("on", q.shuffle);
     repeatBtn.classList.toggle("on", q.repeat !== "off");
-    repeatBtn.textContent = q.repeat === "one" ? "↻¹" : "↻";
+    setIcon(repeatBtn, q.repeat === "one" ? "repeatOne" : "repeat");
     repeatBtn.title = `Repeat: ${q.repeat}`;
     if (!dragging) {
       volume.value = String(Math.round(q.volume * 100));
-      volIcon.textContent = q.volume === 0 ? "🔇" : q.volume < 0.5 ? "🔉" : "🔊";
+      setIcon(volIcon, q.volume === 0 ? "mute" : q.volume < 0.5 ? "volumeLow" : "volume");
     }
   };
 
   let lastId: number | null = -1;
   const renderTick = () => {
     const t = store.tick;
-    playBtn.textContent = t.playing ? "⏸" : "▶";
+    setIcon(playBtn, t.playing ? "pause" : "play");
     if (!dragging) {
       seek.value = String(t.duration ? Math.round((t.position / t.duration) * 1000) : 0);
       pos.textContent = fmtTime(t.position);
@@ -146,9 +150,28 @@ export function mountPlayerBar() {
 export function mountNowPlaying() {
   const root = $("#nowplaying");
   const art = artImg("np-art");
+  art.title = "Click to enlarge";
+  art.addEventListener("click", () => {
+    const t = store.nowPlaying;
+    if (t?.hasArt) openArtViewer(t);
+  });
   const details = h("div", { class: "np-details" });
   const upNext = h("div", { class: "np-next" });
-  root.append(art, details, h("div", { class: "np-head" }, "Up next"), upNext);
+  const lyricsBox = h("div", { class: "np-lyrics" });
+  // Lyrics and the up-next list share the space below the details.
+  const tabs = h("div", { class: "np-tabs" });
+  const tab = (key: string, label: string) =>
+    h("button", { type: "button", class: "np-tab", "data-tab": key, onclick: () => run(() => showTab(key, true)) }, label);
+  tabs.append(tab("lyrics", "Lyrics"), tab("next", "Up next"));
+  const showTab = async (key: string, save = false) => {
+    for (const b of tabs.querySelectorAll<HTMLElement>(".np-tab")) b.classList.toggle("active", b.dataset.tab === key);
+    lyricsBox.style.display = key === "lyrics" ? "" : "none";
+    upNext.style.display = key === "next" ? "" : "none";
+    if (save) await saveSetting("npTab", key);
+  };
+  root.append(art, details, tabs, lyricsBox, upNext);
+  void showTab(store.settings.npTab === "next" ? "next" : "lyrics");
+  mountLyrics(lyricsBox);
 
   const render = () => {
     root.style.display = store.settings.nowPlayingPanel === "off" ? "none" : "";

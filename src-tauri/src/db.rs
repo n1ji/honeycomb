@@ -7,7 +7,7 @@ use crate::models::{Playlist, SmartRules, Track};
 
 pub const TRACK_COLS: &str = "id, path, title, artist, album_artist, album, genre, composer, comment, \
      year, track_no, disc_no, duration, bitrate, sample_rate, format, rating, play_count, \
-     last_played, date_added, mtime, has_art, loved";
+     last_played, date_added, mtime, has_art, loved, inbox";
 
 pub fn open(path: &Path) -> Result<Connection> {
     let conn = Connection::open(path)?;
@@ -59,7 +59,14 @@ pub fn migrate(conn: &Connection) -> Result<()> {
             position INTEGER NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_pt_playlist ON playlist_tracks(playlist_id, position);
-        CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+        CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        -- LRCLIB answers; body NULL and instrumental 0 means \"not found\".
+        CREATE TABLE IF NOT EXISTS lyrics (
+            track_id INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
+            body TEXT,
+            instrumental INTEGER NOT NULL DEFAULT 0,
+            fetched INTEGER NOT NULL
+        );",
     )?;
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
     if version < 1 {
@@ -69,6 +76,17 @@ pub fn migrate(conn: &Connection) -> Result<()> {
              ALTER TABLE tracks ADD COLUMN loved INTEGER NOT NULL DEFAULT 0;
              UPDATE tracks SET rating = rating * 2;
              PRAGMA user_version = 1;
+             COMMIT;",
+        )?;
+    }
+    if version < 2 {
+        // v2: an inbox for tracks that turn up in folders already scanned once.
+        conn.execute_batch(
+            "BEGIN;
+             ALTER TABLE tracks ADD COLUMN inbox INTEGER NOT NULL DEFAULT 0;
+             ALTER TABLE folders ADD COLUMN scanned INTEGER NOT NULL DEFAULT 0;
+             UPDATE folders SET scanned = 1;
+             PRAGMA user_version = 2;
              COMMIT;",
         )?;
     }
@@ -100,6 +118,7 @@ pub fn row_to_track(row: &Row) -> rusqlite::Result<Track> {
         mtime: row.get(20)?,
         has_art: row.get(21)?,
         loved: row.get(22)?,
+        inbox: row.get(23)?,
     })
 }
 
@@ -174,6 +193,14 @@ pub fn folders(conn: &Connection) -> Result<Vec<String>> {
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
+/// Folders that finished a scan before. New files in them go to the inbox;
+/// a folder's first scan doesn't, so adding a collection doesn't flood it.
+pub fn scanned_folders(conn: &Connection) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare("SELECT path FROM folders WHERE scanned = 1")?;
+    let rows = stmt.query_map([], |r| r.get(0))?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
 // ---------- settings ----------
 
 pub fn settings(conn: &Connection) -> Result<Vec<(String, String)>> {
@@ -241,8 +268,8 @@ mod tests {
     #[test]
     fn v1_migration_doubles_ratings_once() {
         let conn = Connection::open_in_memory().unwrap();
-        // A v0 database: the base schema (v1 step skipped) with 0-5 star ratings.
-        conn.execute_batch("PRAGMA user_version = 1;").unwrap();
+        // A v0 database: the base schema (upgrade steps skipped) with 0-5 star ratings.
+        conn.execute_batch("PRAGMA user_version = 99;").unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(
             "PRAGMA user_version = 0;
@@ -259,6 +286,98 @@ mod tests {
             .collect::<rusqlite::Result<_>>()
             .unwrap();
         assert_eq!(ratings, [8, 0]);
-        assert!(!all_tracks(&conn).unwrap()[0].loved);
+        let t = &all_tracks(&conn).unwrap()[0];
+        assert!(!t.loved && !t.inbox);
+        let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(v, 2);
+    }
+}
+
+/// Benchmark library generator (no audio files; the rows are enough to time
+/// loading, search, sorting and scrolling). Writes `library.db` into a fresh dir:
+/// HONEYCOMB_BENCH_DIR=/tmp/hc-bench HONEYCOMB_BENCH_TRACKS=100000 cargo test --lib gen_bench_library -- --ignored
+#[cfg(test)]
+mod bench {
+    use super::*;
+    use crate::models::Track;
+    use rand::rngs::StdRng;
+    use rand::{Rng, SeedableRng};
+
+    const WORDS: &[&str] = &[
+        "love", "night", "city", "fire", "dream", "light", "heart", "rain", "summer", "ghost", "river", "gold",
+        "echo", "neon", "storm", "honey", "glass", "wild", "blue", "silver", "midnight", "ocean", "static", "velvet",
+        "paper", "shadow", "electric", "garden", "highway", "orbit", "signal", "winter", "the", "of", "in", "my",
+    ];
+    const GENRES: &[&str] = &[
+        "Rock", "Pop", "Electronic", "Jazz", "Hip-Hop", "Classical", "Metal", "Folk", "Ambient", "Soul", "Phonk",
+        "Drum & Bass", "House", "Techno", "Punk", "Shoegaze", "Lo-fi", "Soundtrack", "Country", "Blues",
+    ];
+
+    fn words(rng: &mut StdRng, n: usize) -> String {
+        let mut s: Vec<String> = (0..n).map(|_| WORDS[rng.gen_range(0..WORDS.len())].to_string()).collect();
+        if let Some(first) = s.first_mut() {
+            *first = first[..1].to_uppercase() + &first[1..];
+        }
+        s.join(" ")
+    }
+
+    #[test]
+    #[ignore]
+    fn gen_bench_library() {
+        let dir = std::env::var("HONEYCOMB_BENCH_DIR").expect("set HONEYCOMB_BENCH_DIR");
+        let n: usize = std::env::var("HONEYCOMB_BENCH_TRACKS").ok().and_then(|v| v.parse().ok()).unwrap_or(100_000);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = Path::new(&dir).join("library.db");
+        assert!(!path.exists(), "{} already exists; use an empty dir", path.display());
+        let mut conn = open(&path).unwrap();
+        migrate(&conn).unwrap();
+        let mut rng = StdRng::seed_from_u64(42);
+        let artists: Vec<String> = (0..n / 20).map(|i| format!("{} {i}", words(&mut rng, 2))).collect();
+        let now = crate::models::now_secs();
+        let tx = conn.transaction().unwrap();
+        let mut i = 0;
+        while i < n {
+            let artist = &artists[rng.gen_range(0..artists.len())];
+            let len = rng.gen_range(1..4);
+            let album = words(&mut rng, len);
+            let genre = GENRES[rng.gen_range(0..GENRES.len())];
+            let year = rng.gen_range(1965..2027);
+            for no in 1..=rng.gen_range(6..16u32) {
+                if i >= n {
+                    break;
+                }
+                let len = rng.gen_range(1..5);
+                let title = words(&mut rng, len);
+                let t = Track {
+                    path: format!("/bench/{artist}/{album}/{no:02} {title}.flac"),
+                    title,
+                    artist: artist.clone(),
+                    album_artist: artist.clone(),
+                    album: album.clone(),
+                    genre: genre.into(),
+                    year: Some(year),
+                    track_no: Some(no),
+                    disc_no: Some(1),
+                    duration: rng.gen_range(90.0..420.0),
+                    bitrate: Some(rng.gen_range(250..1100)),
+                    sample_rate: Some(44100),
+                    format: "FLAC".into(),
+                    date_added: now - rng.gen_range(0..200_000_000),
+                    ..Default::default()
+                };
+                let id = upsert_track(&tx, &t).unwrap();
+                if rng.gen_bool(0.3) {
+                    tx.execute(
+                        "UPDATE tracks SET play_count = ?2, rating = ?3, last_played = ?4 WHERE id = ?1",
+                        params![id, rng.gen_range(1..60), rng.gen_range(0..11), now - rng.gen_range(0..30_000_000)],
+                    )
+                    .unwrap();
+                }
+                i += 1;
+            }
+        }
+        tx.commit().unwrap();
+        let count: i64 = conn.query_row("SELECT count(*) FROM tracks", [], |r| r.get(0)).unwrap();
+        println!("wrote {count} tracks to {}", path.display());
     }
 }

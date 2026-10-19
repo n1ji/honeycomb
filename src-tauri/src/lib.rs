@@ -1,10 +1,13 @@
 mod db;
 mod importer;
+mod lyrics;
+mod media;
 mod meta;
 mod models;
 mod player;
 mod scanner;
 mod smart;
+mod version;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -50,7 +53,12 @@ impl AppState {
 
 #[tauri::command]
 fn get_tracks(state: State<AppState>) -> CmdResult<Vec<Track>> {
-    db::all_tracks(&state.conn()).map_err(err)
+    let t = std::time::Instant::now();
+    let tracks = db::all_tracks(&state.conn()).map_err(err)?;
+    if perf_enabled() {
+        eprintln!("perf: get_tracks query {} tracks in {:.1} ms", tracks.len(), t.elapsed().as_secs_f64() * 1000.0);
+    }
+    Ok(tracks)
 }
 
 #[tauri::command]
@@ -89,6 +97,19 @@ fn set_rating(state: State<AppState>, ids: Vec<i64>, rating: u8) -> CmdResult<()
             .map_err(err)?;
     }
     Ok(())
+}
+
+/// Take tracks out of the inbox (all of them when `ids` is None).
+#[tauri::command]
+fn clear_inbox(state: State<AppState>, ids: Option<Vec<i64>>) -> CmdResult<()> {
+    let conn = state.conn();
+    match ids {
+        None => conn.execute("UPDATE tracks SET inbox = 0 WHERE inbox = 1", []).map(|_| ()),
+        Some(ids) => ids
+            .iter()
+            .try_for_each(|id| conn.execute("UPDATE tracks SET inbox = 0 WHERE id = ?1", [id]).map(|_| ())),
+    }
+    .map_err(err)
 }
 
 #[tauri::command]
@@ -308,6 +329,62 @@ fn save_text(path: String, text: String) -> CmdResult<()> {
     std::fs::write(path, text).map_err(err)
 }
 
+// ---------- artwork ----------
+
+/// File extension for a track's cover ("jpg", "png"…), or None without one.
+#[tauri::command]
+async fn artwork_ext(state: State<'_, AppState>, track_id: i64) -> CmdResult<Option<String>> {
+    let path = db::track_by_id(&state.conn(), track_id).map_err(err)?.ok_or("track not found")?.path;
+    Ok(meta::artwork(Path::new(&path)).map(|(_, mime)| mime.rsplit('/').next().unwrap_or("jpg").replace("jpeg", "jpg")))
+}
+
+/// Save a track's cover, as stored (no re-encoding), to `dest`.
+#[tauri::command]
+async fn save_artwork(state: State<'_, AppState>, track_id: i64, dest: String) -> CmdResult<()> {
+    let path = db::track_by_id(&state.conn(), track_id).map_err(err)?.ok_or("track not found")?.path;
+    let (data, _) = meta::artwork(Path::new(&path)).ok_or("this track has no artwork")?;
+    std::fs::write(dest, data).map_err(err)
+}
+
+// ---------- lyrics ----------
+
+#[tauri::command]
+async fn get_lyrics(app: AppHandle, track_id: i64) -> CmdResult<lyrics::Lyrics> {
+    // File reads and network lookups run off the async workers.
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let conn = db::open(&state.db_path).map_err(err)?;
+        let track = db::track_by_id(&conn, track_id).map_err(err)?.ok_or("track not found")?;
+        let online = db::settings(&conn)
+            .map_err(err)?
+            .into_iter()
+            .find(|(k, _)| k == "lyricsOnline")
+            .is_none_or(|(_, v)| v != "off");
+        Ok(lyrics::get(&conn, &track, online))
+    })
+    .await
+    .map_err(err)?
+}
+
+// ---------- updates ----------
+
+#[tauri::command]
+async fn update_status(refresh: bool) -> version::Status {
+    version::status(refresh)
+}
+
+// ---------- benchmark mode ----------
+
+#[tauri::command]
+fn perf_enabled() -> bool {
+    std::env::var_os("HONEYCOMB_PERF").is_some()
+}
+
+#[tauri::command]
+fn perf_log(line: String) {
+    eprintln!("perf: {line}");
+}
+
 // ---------- player ----------
 
 #[tauri::command]
@@ -379,6 +456,32 @@ fn serve_art(app: &AppHandle, uri_path: &str) -> Response<Vec<u8>> {
     }
 }
 
+/// Identifier used before 0.1.x builds were renamed; its data is copied over once.
+const LEGACY_IDENTIFIER: &str = "com.honeycomb.player";
+
+/// Where the library lives. `HONEYCOMB_DATA_DIR` points it elsewhere, so test
+/// and benchmark libraries never touch the real one.
+fn data_dir(app: &AppHandle) -> anyhow::Result<PathBuf> {
+    if let Some(dir) = std::env::var_os("HONEYCOMB_DATA_DIR") {
+        let dir = PathBuf::from(dir);
+        std::fs::create_dir_all(&dir)?;
+        return Ok(dir);
+    }
+    let dir = app.path().app_data_dir()?;
+    std::fs::create_dir_all(&dir)?;
+    let legacy = dir.parent().map(|p| p.join(LEGACY_IDENTIFIER));
+    if let Some(legacy) = legacy.filter(|l| l.join("library.db").is_file() && !dir.join("library.db").exists()) {
+        // Copy rather than move, so the old copy stays as a backup.
+        for name in ["library.db", "library.db-wal", "library.db-shm"] {
+            if legacy.join(name).is_file() {
+                std::fs::copy(legacy.join(name), dir.join(name))?;
+            }
+        }
+        eprintln!("moved library from {} to {}", legacy.display(), dir.display());
+    }
+    Ok(dir)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -390,8 +493,7 @@ pub fn run() {
             std::thread::spawn(move || responder.respond(serve_art(&app, &path)));
         })
         .setup(|app| {
-            let dir = app.path().app_data_dir()?;
-            std::fs::create_dir_all(&dir)?;
+            let dir = data_dir(app.handle())?;
             let db_path = dir.join("library.db");
             let conn = db::open(&db_path)?;
             db::migrate(&conn)?;
@@ -401,6 +503,7 @@ pub fn run() {
                 .and_then(|(_, v)| v.parse().ok())
                 .unwrap_or(0.8);
             let player = player::spawn(app.handle().clone(), db_path.clone(), volume);
+            media::init(app.handle(), player.clone());
             app.manage(AppState {
                 db: Mutex::new(conn),
                 db_path,
@@ -416,6 +519,7 @@ pub fn run() {
             remove_folder,
             rescan,
             set_rating,
+            clear_inbox,
             edit_tags,
             get_settings,
             set_setting,
@@ -432,6 +536,12 @@ pub fn run() {
             import_preview,
             import_apply,
             save_text,
+            update_status,
+            get_lyrics,
+            artwork_ext,
+            save_artwork,
+            perf_enabled,
+            perf_log,
             player_load,
             player_enqueue,
             player_cmd,

@@ -25,6 +25,8 @@ export interface Track {
   mtime: number;
   hasArt: boolean;
   loved: boolean;
+  /** Newly found and not reviewed yet. */
+  inbox: boolean;
 }
 
 export interface SmartRule {
@@ -114,6 +116,23 @@ export interface ImportOutcome {
   missingSkipped: number;
 }
 
+export interface UpdateStatus {
+  state: "upToDate" | "behind" | "ahead" | "diverged" | "unknown";
+  behind: number;
+  ahead: number;
+  local: string;
+  remote: string;
+  repo: string;
+  message: string;
+}
+
+export interface Lyrics {
+  source: "embedded" | "file" | "lrclib" | "none";
+  synced: boolean;
+  instrumental: boolean;
+  lines: { time: number | null; text: string }[];
+}
+
 export const api = {
   getTracks: () => invoke<Track[]>("get_tracks"),
   getFolders: () => invoke<string[]>("get_folders"),
@@ -121,6 +140,8 @@ export const api = {
   removeFolder: (path: string) => invoke<void>("remove_folder", { path }),
   rescan: () => invoke<void>("rescan"),
   setRating: (ids: number[], rating: number) => invoke<void>("set_rating", { ids, rating }),
+  /** Take tracks out of the inbox; all of them when `ids` is null. */
+  clearInbox: (ids: number[] | null = null) => invoke<void>("clear_inbox", { ids }),
   editTags: (ids: number[], edit: TagEdit) => invoke<Track[]>("edit_tags", { ids, edit }),
 
   getSettings: () => invoke<Record<string, string>>("get_settings"),
@@ -143,6 +164,10 @@ export const api = {
   importApply: (xmlPath: string | null, m3uPaths: string[], importStats: boolean, playlists: number[]) =>
     invoke<ImportOutcome>("import_apply", { xmlPath, m3uPaths, importStats, playlists }),
   saveText: (path: string, text: string) => invoke<void>("save_text", { path, text }),
+  artworkExt: (trackId: number) => invoke<string | null>("artwork_ext", { trackId }),
+  saveArtwork: (trackId: number, dest: string) => invoke<void>("save_artwork", { trackId, dest }),
+  lyrics: (trackId: number) => invoke<Lyrics>("get_lyrics", { trackId }),
+  updateStatus: (refresh = false) => invoke<UpdateStatus>("update_status", { refresh }),
 
   load: (trackIds: number[], index: number) => invoke<void>("player_load", { trackIds, index }),
   enqueue: (trackIds: number[], next: boolean) => invoke<void>("player_enqueue", { trackIds, next }),

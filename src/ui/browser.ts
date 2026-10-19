@@ -89,7 +89,13 @@ export function mountToolbar() {
   store.on("visible", () => {
     const v = store.view;
     title.textContent =
-      v.kind === "library" ? "Music" : v.kind === "queue" ? "Now Playing" : (store.currentPlaylist?.name ?? "Playlist");
+      v.kind === "library"
+        ? "Music"
+        : v.kind === "inbox"
+          ? "Inbox"
+          : v.kind === "queue"
+            ? "Now Playing"
+            : (store.currentPlaylist?.name ?? "Playlist");
     const n = store.visible.length;
     const total = store.visible.reduce((s, t) => s + t.duration, 0);
     summary.textContent = `${n.toLocaleString()} track${n === 1 ? "" : "s"} · ${fmtTotal(total)}`;

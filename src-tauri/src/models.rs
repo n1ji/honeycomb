@@ -28,6 +28,8 @@ pub struct Track {
     pub mtime: i64,
     pub has_art: bool,
     pub loved: bool,
+    /// Newly found and not reviewed yet.
+    pub inbox: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
