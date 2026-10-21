@@ -27,10 +27,10 @@ First baseline, recorded on 2026-10-19 with commit `0d83811` plus the audio and 
 
 ## Likely fixes, biggest first
 
-1. **Sorting:** use one shared `Intl.Collator` instead of `localeCompare` per comparison, and cache sort keys. This should cut sort and rebuild times by roughly 10×.
+1. **Sorting:** use one shared `Intl.Collator` instead of `localeCompare` per comparison, and cache sort keys. This should cut sort and rebuild times by roughly 10×. *Done; see below.*
 2. **Idle CPU:** only send player ticks while playing (or when something changed), and check the audio device less often while idle. *Done with the Kaseki audio engine; see below.*
-3. **Search:** precompute each track's lowercase search text once, and avoid rebuilding the column browser's panes when only the search changed.
-4. **Startup and memory:** send tracks in a compact form (arrays instead of objects with repeated keys), or load the visible rows on demand instead of the whole library.
+3. **Search:** precompute each track's lowercase search text once, and avoid rebuilding the column browser's panes when only the search changed. *Done; see below.*
+4. **Startup and memory:** send tracks in a compact form (arrays instead of objects with repeated keys), or load the visible rows on demand instead of the whole library. *Compact form done; loading on demand not needed yet.*
 
 ## Idle CPU after the Kaseki audio engine
 
@@ -42,3 +42,29 @@ Measured 2026-10-19 on the same machine (Low Power Mode on), same 100k library, 
 | After | 1.03% | 0.87% | 0.43% | **2.33%** |
 
 With Kaseki, the player no longer opens the output until something plays, closes it after 30 s paused or stopped, and stops ticking while idle. A `sample` of the idle app shows the `audio` and `decoder` threads blocked for the whole run, so what's left is WebKit and the main event loop.
+
+## After the sorting, search and loading fixes
+
+Measured 2026-10-21, same machine and 100k library, Low Power Mode still on. Both release builds ran back to back on fresh copies of the same library with `HONEYCOMB_PERF=1`: "before" is `ed2a658` (Kaseki), "after" adds:
+
+- **Sorting:** one shared `Intl.Collator`, and each text value's rank in collation order computed once per library load. Sorts then compare plain numbers, with ties broken by a precomputed library-order position. The library view reuses the precomputed order.
+- **Search:** each track's lowercase search text is built once per library load.
+- **Column browser:** a pane is rebuilt only when its contents change. Searching or sorting leaves the panes alone, and picking an artist only moves the highlight in the genre pane.
+- **Loading:** `get_tracks` sends field names once plus one array per track (`TrackTable`) instead of 100k objects with repeated keys.
+
+| What | Before | After |
+|---|---|---|
+| Startup to first list paint | 2.4 s | **0.95 s** |
+| `get_tracks` round trip (warm) | 335 ms | 289 ms |
+| Library view rebuild | 1.5 s | **142 ms** |
+| Search (any query) | 230–252 ms | **62–65 ms** |
+| Sort by title | 3.1–3.6 s | **68–76 ms** |
+| Sort off | 225 ms | 43 ms |
+| Filter one artist | 133 ms | 65 ms |
+| Clear filter | 222 ms | 79 ms |
+| Scroll (10 rows per frame) | 30 fps, p95 36 ms, worst 47 ms | 30 fps, p95 34 ms, worst 35 ms |
+| Memory (RSS after the run) | 222 MB | 196 MB |
+| Idle CPU (30 s) | 1.1% | 1.7% |
+
+Memory here is resident memory after 20 s idle (`ps` RSS) of the app plus the WebKit processes it started, which macOS compresses, so it's lower than the first baseline's 639 MB. Compare the two columns with each other, not with that number. Idle CPU is about 1–2% either way; a 30 s sample at this level is mostly noise. Scrolling is still capped at 30 fps by Low Power Mode.
+

@@ -19,7 +19,7 @@ use rusqlite::Connection;
 use tauri::http::{Response, StatusCode, header};
 use tauri::{AppHandle, Manager, State};
 
-use models::{Playlist, SmartRules, TagEdit, Track, now_secs};
+use models::{Playlist, SmartRules, TagEdit, Track, TrackTable, now_secs};
 use player::{Cmd, PlayerHandle, QItem, Repeat};
 
 pub struct AppState {
@@ -53,13 +53,13 @@ impl AppState {
 // ---------- library ----------
 
 #[tauri::command]
-fn get_tracks(state: State<AppState>) -> CmdResult<Vec<Track>> {
+fn get_tracks(state: State<AppState>) -> CmdResult<TrackTable> {
     let t = std::time::Instant::now();
     let tracks = db::all_tracks(&state.conn()).map_err(err)?;
     if perf_enabled() {
         eprintln!("perf: get_tracks query {} tracks in {:.1} ms", tracks.len(), t.elapsed().as_secs_f64() * 1000.0);
     }
-    Ok(tracks)
+    Ok(TrackTable(tracks))
 }
 
 #[tauri::command]

@@ -36,6 +36,12 @@ class Store {
   /** True when the last recompute replaced the list (scroll back to top). */
   listReset = true;
 
+  /** Bumped whenever track data changes; caches below are keyed on it. */
+  tracksVersion = 0;
+  /** Bumped whenever `viewIds` changes. */
+  viewVersion = 0;
+  private cache: SortCache | null = null;
+
   queue: QueueState = { trackIds: [], current: null, shuffle: false, repeat: "off", volume: 0.8, error: null };
   tick: Tick = { trackId: null, position: 0, duration: 0, playing: false };
 
@@ -56,6 +62,7 @@ class Store {
   async loadTracks(background = false) {
     const list = await api.getTracks();
     this.tracks = new Map(list.map((t) => [t.id, t]));
+    this.tracksVersion++;
     this.emit("tracks");
     await this.refreshView(background ? "keepScroll" : "reset");
   }
@@ -67,6 +74,7 @@ class Store {
 
   updateTracks(list: Track[]) {
     for (const t of list) this.tracks.set(t.id, t);
+    this.tracksVersion++;
     this.emit("tracks");
     this.recompute("keepAll");
   }
@@ -86,18 +94,20 @@ class Store {
   async refreshView(mode: Keep = "reset") {
     const v = this.view;
     if (v.kind === "library") {
-      this.viewIds = [...this.tracks.values()].sort(libraryOrder).map((t) => t.id);
+      this.viewIds = this.sortCache().libraryIds;
     } else if (v.kind === "inbox") {
       // Newest first.
+      const pos = this.sortCache().pos;
       this.viewIds = [...this.tracks.values()]
         .filter((t) => t.inbox)
-        .sort((a, b) => b.dateAdded - a.dateAdded || libraryOrder(a, b))
+        .sort((a, b) => b.dateAdded - a.dateAdded || pos.get(a.id)! - pos.get(b.id)!)
         .map((t) => t.id);
     } else if (v.kind === "queue") {
       this.viewIds = this.queue.trackIds;
     } else {
       this.viewIds = await api.playlistTrackIds(v.id);
     }
+    this.viewVersion++;
     this.recompute(mode);
   }
 
@@ -130,15 +140,22 @@ class Store {
     const q = this.search.trim().toLowerCase();
     if (q) {
       const words = q.split(/\s+/);
+      const hay = this.sortCache().searchText;
       rows = rows.filter((r) => {
-        const hay = `${r.t.title} ${r.t.artist} ${r.t.albumArtist} ${r.t.album} ${r.t.genre}`.toLowerCase();
-        return words.every((w) => hay.includes(w));
+        const text = hay.get(r.t.id) ?? "";
+        return words.every((w) => text.includes(w));
       });
     }
 
     if (this.sort) {
       const { key, desc } = this.sort;
-      rows.sort((a, b) => cmp(a.t[key], b.t[key]) * (desc ? -1 : 1) || libraryOrder(a.t, b.t));
+      const cache = this.sortCache();
+      const value = cache.valueOf(key);
+      const d = desc ? -1 : 1;
+      // Sort on plain numbers computed once per row, ties in library order.
+      const keyed = rows.map((r) => ({ r, v: value(r.t), p: cache.pos.get(r.t.id) ?? 0 }));
+      keyed.sort((a, b) => (a.v === b.v ? a.p - b.p : a.v < b.v ? -d : d));
+      rows = keyed.map((k) => k.r);
     }
 
     this.visible = rows.map((r) => r.t);
@@ -191,12 +208,19 @@ class Store {
     this.emit("queue");
     if (this.view.kind === "queue") {
       this.viewIds = q.trackIds;
+      this.viewVersion++;
       this.recompute("keepAll");
     }
   }
 
   get nowPlaying(): Track | undefined {
     return this.tick.trackId !== null ? this.tracks.get(this.tick.trackId) : undefined;
+  }
+
+  /** Sort ranks and search text for the current tracks, rebuilt when they change. */
+  sortCache(): SortCache {
+    if (this.cache?.version !== this.tracksVersion) this.cache = new SortCache(this.tracks, this.tracksVersion);
+    return this.cache;
   }
 
   /** Play the visible list starting at row `index`. */
@@ -216,23 +240,75 @@ export function artistOf(t: Track): string {
   return t.albumArtist || t.artist;
 }
 
-function cmp(a: unknown, b: unknown): number {
-  if (a === b) return 0;
-  if (a === null || a === undefined || a === "") return 1;
-  if (b === null || b === undefined || b === "") return -1;
-  if (typeof a === "string" && typeof b === "string") return a.localeCompare(b, undefined, { sensitivity: "base" });
-  return (a as number) < (b as number) ? -1 : 1;
+/**
+ * One collator for every text comparison: case- and accent-insensitive.
+ * (`localeCompare` with options builds a new one on every call, which made
+ * sorting 100k tracks take seconds.)
+ */
+export const collator = new Intl.Collator(undefined, { sensitivity: "base" });
+
+/** Rank of each distinct text value in collation order; equal-looking values share a rank. */
+function ranks(values: Iterable<string>): Map<string, number> {
+  const distinct = [...new Set(values)].filter((v) => v !== "").sort(collator.compare);
+  const out = new Map<string, number>();
+  let rank = 0;
+  distinct.forEach((v, i) => {
+    if (i > 0 && collator.compare(distinct[i - 1], v) !== 0) rank++;
+    out.set(v, rank);
+  });
+  return out;
 }
 
-/** Album artist → album → disc → track number → title. */
-export function libraryOrder(a: Track, b: Track): number {
-  return (
-    cmp(artistOf(a), artistOf(b)) ||
-    cmp(a.album, b.album) ||
-    cmp(a.discNo ?? 0, b.discNo ?? 0) ||
-    cmp(a.trackNo ?? 0, b.trackNo ?? 0) ||
-    cmp(a.title, b.title)
-  );
+/**
+ * Precomputed sort keys, so sorting compares numbers instead of text. Empty
+ * and missing values sort last (Infinity).
+ */
+export class SortCache {
+  /** Library order: album artist → album → disc → track number → title. */
+  libraryIds: number[];
+  /** Each track's position in library order (the tie-breaker for every sort). */
+  pos = new Map<number, number>();
+  /** Lowercased text that search matches against. */
+  searchText = new Map<number, string>();
+  private textRanks = new Map<string, Map<string, number>>();
+
+  constructor(
+    private tracks: Map<number, Track>,
+    readonly version: number,
+  ) {
+    const all = [...tracks.values()];
+    const artist = this.rankOf((t) => artistOf(t), "artistOf");
+    const album = this.rankOf((t) => t.album, "album");
+    const title = this.rankOf((t) => t.title, "title");
+    const keyed = all.map((t) => [artist(t), album(t), t.discNo ?? 0, t.trackNo ?? 0, title(t), t.id] as const);
+    keyed.sort((a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2] || a[3] - b[3] || a[4] - b[4]);
+    this.libraryIds = keyed.map((k) => k[5]);
+    this.libraryIds.forEach((id, i) => this.pos.set(id, i));
+    for (const t of all) {
+      this.searchText.set(t.id, `${t.title} ${t.artist} ${t.albumArtist} ${t.album} ${t.genre}`.toLowerCase());
+    }
+  }
+
+  /** A function giving a track's rank for a text field, computed once per field. */
+  private rankOf(get: (t: Track) => string, name: string): (t: Track) => number {
+    let r = this.textRanks.get(name);
+    if (!r) {
+      r = ranks([...this.tracks.values()].map(get));
+      this.textRanks.set(name, r);
+    }
+    const map = r;
+    return (t) => map.get(get(t)) ?? Infinity;
+  }
+
+  /** A numeric sort value for any column. */
+  valueOf(key: SortKey): (t: Track) => number {
+    const sample = [...this.tracks.values()].find((t) => t[key] !== null && t[key] !== undefined)?.[key];
+    if (typeof sample === "string") return this.rankOf((t) => t[key] as string, key);
+    return (t) => {
+      const v = t[key];
+      return v === null || v === undefined ? Infinity : Number(v);
+    };
+  }
 }
 
 export const store = new Store();

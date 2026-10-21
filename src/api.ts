@@ -134,7 +134,16 @@ export interface Lyrics {
 }
 
 export const api = {
-  getTracks: () => invoke<Track[]>("get_tracks"),
+  /** The whole library. It arrives as field names plus one array per track (much smaller than objects). */
+  getTracks: async () => {
+    const table = await invoke<{ fields: string[]; rows: unknown[][] }>("get_tracks");
+    const { fields, rows } = table;
+    return rows.map((row) => {
+      const t: Record<string, unknown> = {};
+      for (let i = 0; i < fields.length; i++) t[fields[i]] = row[i];
+      return t as unknown as Track;
+    });
+  },
   getFolders: () => invoke<string[]>("get_folders"),
   addFolder: (path: string) => invoke<void>("add_folder", { path }),
   removeFolder: (path: string) => invoke<void>("remove_folder", { path }),

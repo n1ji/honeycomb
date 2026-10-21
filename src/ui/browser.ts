@@ -1,5 +1,5 @@
 import { Track } from "../api";
-import { artistOf, Filters, store } from "../store";
+import { artistOf, collator, Filters, store } from "../store";
 import { $, fmtTotal, h } from "../util";
 
 /**
@@ -22,41 +22,62 @@ export function mountBrowser() {
     });
   }
 
+  // What each pane was last built from. Searching doesn't change the panes,
+  // and picking an artist doesn't change the genre pane, so most updates
+  // only move the highlight instead of rebuilding thousands of rows.
+  const built = panes.map(() => "");
+
   const render = () => {
     const show = store.view.kind !== "queue" && store.settings.browser !== "off";
     root.style.display = show ? "" : "none";
     if (!show) return;
 
-    let rows = store.baseRows().map((r) => r.t);
-    for (const p of panes) {
-      const counts = new Map<string, number>();
-      for (const t of rows) {
-        const v = p.get(t);
-        counts.set(v, (counts.get(v) ?? 0) + 1);
-      }
-      const values = [...counts.keys()].sort((a, b) => {
-        if (!a) return 1;
-        if (!b) return -1;
-        return a.localeCompare(b, undefined, { sensitivity: "base" });
-      });
+    // Rows feeding the next pane: the view, narrowed by each selection so far.
+    let rows: Track[] | null = null;
+    const base = () => (rows ??= store.baseRows().map((r) => r.t));
+    let inputs = `${store.tracksVersion}|${store.viewVersion}`;
+    for (const [i, p] of panes.entries()) {
       const selected = store.filters[p.key];
-      const items = [
+      if (built[i] === inputs) {
+        // Same contents: just move the highlight.
+        for (const el of p.list.querySelectorAll<HTMLElement>(".pane-item")) {
+          el.classList.toggle("active", el.dataset.all ? selected === null : el.dataset.value === selected);
+        }
+      } else {
+        built[i] = inputs;
+        renderPane(p, base(), selected);
+      }
+      inputs += `|${selected}`;
+      if (selected !== null) rows = base().filter((t) => p.get(t) === selected);
+    }
+  };
+
+  const renderPane = (p: (typeof panes)[number], rows: Track[], selected: string | null) => {
+    const counts = new Map<string, number>();
+    for (const t of rows) {
+      const v = p.get(t);
+      counts.set(v, (counts.get(v) ?? 0) + 1);
+    }
+    const values = [...counts.keys()].sort((a, b) => {
+      if (!a) return 1;
+      if (!b) return -1;
+      return collator.compare(a, b);
+    });
+    const items = [
+      h(
+        "div",
+        { class: `pane-item all${selected === null ? " active" : ""}`, "data-all": "1" },
+        `All (${values.length.toLocaleString()} ${p.label.toLowerCase()}${values.length === 1 ? "" : "s"})`,
+      ),
+      ...values.map((v) =>
         h(
           "div",
-          { class: `pane-item all${selected === null ? " active" : ""}`, "data-all": "1" },
-          `All (${values.length.toLocaleString()} ${p.label.toLowerCase()}${values.length === 1 ? "" : "s"})`,
+          { class: `pane-item${selected === v ? " active" : ""}`, "data-value": v, title: v || "Unknown" },
+          v || h("em", {}, "Unknown"),
         ),
-        ...values.map((v) =>
-          h(
-            "div",
-            { class: `pane-item${selected === v ? " active" : ""}`, "data-value": v, title: v || "Unknown" },
-            v || h("em", {}, "Unknown"),
-          ),
-        ),
-      ];
-      p.list.replaceChildren(...items);
-      if (selected !== null) rows = rows.filter((t) => p.get(t) === selected);
-    }
+      ),
+    ];
+    p.list.replaceChildren(...items);
   };
 
   store.on("visible", render);
