@@ -124,6 +124,10 @@ export interface UpdateStatus {
   remote: string;
   repo: string;
   message: string;
+  /** "checkout": compared with GitHub's main through git; "release": with the newest release. */
+  source: "checkout" | "release";
+  /** The newest release's page (release checks only). */
+  url: string;
 }
 
 export interface Lyrics {

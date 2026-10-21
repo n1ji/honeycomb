@@ -1,5 +1,7 @@
 //! "How many builds behind?" Compares the commit this binary was built from
-//! with `main` on GitHub, using the git checkout it was built in.
+//! with GitHub: with `main` through the git checkout it was built in, or, for
+//! downloaded builds (no checkout on this computer), with the newest release
+//! through GitHub's API.
 
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
@@ -9,6 +11,7 @@ use serde::Serialize;
 
 const COMMIT: &str = env!("HONEYCOMB_COMMIT");
 const REPO: &str = env!("HONEYCOMB_REPO");
+const GITHUB: &str = env!("HONEYCOMB_GITHUB");
 const BRANCH: &str = "main";
 const CACHE: Duration = Duration::from_secs(600);
 
@@ -23,6 +26,11 @@ pub struct Status {
     pub remote: String,
     pub repo: String,
     pub message: String,
+    /// "checkout" (compared with `main` through git) or "release" (compared
+    /// with GitHub's newest release).
+    pub source: &'static str,
+    /// The newest release's page, for downloading it.
+    pub url: String,
 }
 
 static LAST: Mutex<Option<(Instant, Status)>> = Mutex::new(None);
@@ -60,8 +68,8 @@ fn count(range: &str) -> Option<u32> {
     git(&["rev-list", "--count", range], Duration::from_secs(5))?.parse().ok()
 }
 
-fn check() -> Status {
-    let mut s = Status {
+fn blank(source: &'static str) -> Status {
+    Status {
         state: "unknown",
         behind: 0,
         ahead: 0,
@@ -69,11 +77,16 @@ fn check() -> Status {
         remote: String::new(),
         repo: REPO.to_string(),
         message: String::new(),
-    };
-    if COMMIT.is_empty() || REPO.is_empty() || !std::path::Path::new(REPO).is_dir() {
-        s.message = "This build wasn't made from a git checkout on this computer, so it can't check for updates.".into();
-        return s;
+        source,
+        url: String::new(),
     }
+}
+
+fn check() -> Status {
+    if REPO.is_empty() || !std::path::Path::new(REPO).join(".git").exists() {
+        return check_release();
+    }
+    let mut s = blank("checkout");
     let fetched = git(&["fetch", "--quiet", "origin", BRANCH], Duration::from_secs(20)).is_some();
     let remote_ref = format!("origin/{BRANCH}");
     s.remote = git(&["rev-parse", &remote_ref], Duration::from_secs(5)).unwrap_or_default();
@@ -103,6 +116,100 @@ fn check() -> Status {
     s
 }
 
+#[derive(serde::Deserialize)]
+struct Release {
+    tag_name: String,
+    name: Option<String>,
+    html_url: String,
+    draft: bool,
+}
+
+#[derive(serde::Deserialize)]
+struct Compare {
+    /// Commits the release has that this build doesn't.
+    ahead_by: u32,
+    /// Commits this build has that the release doesn't.
+    behind_by: u32,
+}
+
+fn agent() -> ureq::Agent {
+    ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(10))
+        .user_agent(concat!("Honeycomb/", env!("CARGO_PKG_VERSION"), " (update check)"))
+        .build()
+}
+
+/// A downloaded build: compare its commit with the newest published release
+/// (pre-releases count; alphas are published as pre-releases).
+fn check_release() -> Status {
+    check_release_for(GITHUB, COMMIT)
+}
+
+/// `github` is "owner/name"; `commit` is this build's commit (or any ref).
+fn check_release_for(github: &str, commit: &str) -> Status {
+    let mut s = blank("release");
+    s.local = commit.to_string();
+    if commit.is_empty() {
+        s.message = "This build doesn't know which commit it came from, so it can't check for updates.".into();
+        return s;
+    }
+    let agent = agent();
+    let api = format!("https://api.github.com/repos/{github}");
+    let releases: Vec<Release> = match agent.get(&format!("{api}/releases?per_page=10")).call() {
+        Ok(r) => match r.into_json() {
+            Ok(v) => v,
+            Err(_) => {
+                s.message = "GitHub sent an answer Honeycomb couldn't read.".into();
+                return s;
+            }
+        },
+        Err(ureq::Error::Status(404, _)) => {
+            s.message = "Couldn't find Honeycomb's releases on GitHub.".into();
+            return s;
+        }
+        Err(ureq::Error::Status(403 | 429, _)) => {
+            s.message = "GitHub is limiting update checks right now; try again later.".into();
+            return s;
+        }
+        Err(_) => {
+            s.message = "Couldn't reach GitHub to check for updates.".into();
+            return s;
+        }
+    };
+    let Some(latest) = releases.into_iter().find(|r| !r.draft) else {
+        s.message = "No releases on GitHub yet.".into();
+        return s;
+    };
+    s.remote = latest.tag_name.clone();
+    s.url = latest.html_url.clone();
+    let cmp: Compare = match agent.get(&format!("{api}/compare/{commit}...{}", latest.tag_name)).call() {
+        Ok(r) => match r.into_json() {
+            Ok(c) => c,
+            Err(_) => {
+                s.message = "GitHub sent an answer Honeycomb couldn't read.".into();
+                return s;
+            }
+        },
+        Err(_) => {
+            s.message = "Couldn't compare this build with the newest release.".into();
+            return s;
+        }
+    };
+    s.behind = cmp.ahead_by;
+    s.ahead = cmp.behind_by;
+    s.state = match (s.behind, s.ahead) {
+        (0, _) => "upToDate",
+        _ => "behind",
+    };
+    let name = latest.name.filter(|n| !n.is_empty()).unwrap_or(latest.tag_name);
+    s.message = if s.state == "upToDate" {
+        "You're on the latest release.".into()
+    } else {
+        format!("{name} is available ({} newer change{}).", s.behind, if s.behind == 1 { "" } else { "s" })
+    };
+    s
+}
+
 /// Cached for 10 minutes unless `refresh` is set.
 pub fn status(refresh: bool) -> Status {
     // HONEYCOMB_UPDATE_PREVIEW=3 pretends to be 3 builds behind, to see the lit bulb.
@@ -115,6 +222,8 @@ pub fn status(refresh: bool) -> Status {
             remote: String::new(),
             repo: REPO.to_string(),
             message: format!("Preview: pretending {n} newer builds are on GitHub."),
+            source: "checkout",
+            url: String::new(),
         };
     }
     if !refresh {
@@ -138,5 +247,35 @@ mod tests {
         let s = super::status(true);
         println!("{s:?}");
         assert_ne!(s.state, "unknown", "{}", s.message);
+    }
+
+    /// Needs network. Runs the release check against a public repo with
+    /// releases (Tauri's own): cargo test release_check -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn release_check() {
+        let repo = "tauri-apps/tauri";
+        let newest = super::check_release_for(repo, "HEAD");
+        println!("{newest:?}");
+        assert!(!newest.remote.is_empty() && newest.url.starts_with("https://github.com/"), "{}", newest.message);
+        // The newest release compared with itself is up to date...
+        let same = super::check_release_for(repo, &newest.remote);
+        println!("{same:?}");
+        assert_eq!(same.state, "upToDate", "{}", same.message);
+        // ...and a years-old tag is far behind.
+        let old = super::check_release_for(repo, "tauri-v2.0.0");
+        println!("{old:?}");
+        assert_eq!(old.state, "behind", "{}", old.message);
+        assert!(old.behind > 100);
+    }
+
+    /// This repo while it's private: GitHub answers 404, which must read as a
+    /// plain "unknown", not an error.
+    #[test]
+    #[ignore]
+    fn release_check_on_this_repo() {
+        let s = super::check_release();
+        println!("{s:?}");
+        assert_eq!(s.source, "release");
     }
 }
