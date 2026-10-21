@@ -1,29 +1,61 @@
 name: Build
 
-# Alpha builds: push a tag like v0.1.0-alpha.1, or run manually from the Actions tab.
-# Builds a universal macOS .dmg and a Windows installer and attaches them to a
-# draft pre-release.
+# Alpha builds: push a tag like v0.1.0-alpha.1 (builds every platform), or run
+# manually from the Actions tab and pick the platforms. Builds a universal macOS
+# .dmg, a Windows installer, and Linux AppImage/.deb/.rpm packages, and attaches
+# them to a draft pre-release.
+#
+# While the repo is private, macOS minutes count 10x against the free quota
+# (Windows 2x), so manual runs skip macOS by default; build the Mac app locally.
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      platforms:
+        description: "Platforms to build, comma-separated: macos, windows, linux"
+        default: "windows,linux"
 
 permissions:
   contents: write
 
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - id: matrix
+        shell: bash
+        env:
+          WANT: ${{ github.event_name == 'workflow_dispatch' && inputs.platforms || 'macos,windows,linux' }}
+        run: |
+          rows=()
+          [[ ",$WANT," == *",macos,"* ]] && rows+=('{"name":"macos","platform":"macos-latest","args":"--target universal-apple-darwin"}')
+          [[ ",$WANT," == *",windows,"* ]] && rows+=('{"name":"windows","platform":"windows-latest","args":""}')
+          # The oldest supported Ubuntu, so the AppImage runs on older distros too.
+          [[ ",$WANT," == *",linux,"* ]] && rows+=('{"name":"linux","platform":"ubuntu-22.04","args":""}')
+          if [ ${#rows[@]} -eq 0 ]; then echo "No platforms picked from: $WANT" >&2; exit 1; fi
+          echo "matrix={\"include\":[$(IFS=,; echo "${rows[*]}")]}" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: plan
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - platform: macos-latest
-            args: --target universal-apple-darwin
-          - platform: windows-latest
-            args: ""
+      matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
+    name: build (${{ matrix.name }})
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Linux build dependencies
+        if: matrix.name == 'linux'
+        run: |
+          sudo apt-get update
+          # WebKitGTK and GTK for the window, ALSA for audio output, patchelf
+          # and rpm for packaging.
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libasound2-dev patchelf rpm
 
       - uses: actions/setup-node@v4
         with:
@@ -32,7 +64,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ${{ matrix.name == 'macos' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - uses: swatinem/rust-cache@v2
         with:
@@ -50,6 +82,7 @@ jobs:
             Alpha build. Not code-signed yet:
             - macOS: right-click Honeycomb.app → Open the first time (or run `xattr -cr /Applications/Honeycomb.app`).
             - Windows: SmartScreen may warn; choose "More info" → "Run anyway".
+            - Linux: the AppImage runs on most distros (`chmod +x` it first); .deb for Debian/Ubuntu, .rpm for Fedora/openSUSE.
           releaseDraft: true
           prerelease: true
           args: ${{ matrix.args }}
