@@ -17,7 +17,7 @@ Linux builds will come with a later release.
 
 The builds aren't code-signed yet, so your system will warn you the first time:
 
-- **macOS:** right-click Honeycomb in Applications and choose **Open**, then **Open** again.
+- **macOS:** open Honeycomb once and dismiss the warning. Then go to **System Settings → Privacy & Security**, scroll down to the message about Honeycomb, click **Open Anyway** and confirm. You only need to do this once. (Right-click → Open no longer skips the warning on macOS 15 and later.) If you'd rather use Terminal, `xattr -cr /Applications/Honeycomb.app` does the same.
 - **Windows:** if SmartScreen says it protected your PC, click **More info**, then **Run anyway**.
 
 ## Features

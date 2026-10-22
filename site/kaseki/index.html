@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kaseki audio engine</title>
+<meta name="description" content="Kaseki is Honeycomb’s own audio engine, written in Rust. Every layer a song passes through on its way from the file to your speakers, and what each one does.">
+<link rel="icon" href="../assets/honeycomb-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Albert+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css?v=1792600100">
+<link rel="stylesheet" href="kaseki.css?v=1792591000">
+<script>document.documentElement.classList.add('js')</script>
+</head>
+<body>
+
+<header class="bar k-bar">
+  <a class="wordmark" href="../"><img src="../assets/honeycomb-icon.png" width="28" height="28" alt="">Honeycomb</a>
+  <nav class="bar-links" aria-label="Main">
+    <a class="link" href="#stack">The stack</a>
+    <a class="link" href="#gapless">Gapless</a>
+    <a class="link" href="#rate">Output rate</a>
+    <a class="button button-small" href="https://github.com/n1ji/honeycomb">Get the alpha</a>
+  </nav>
+</header>
+
+<main>
+
+<!-- ============ hero ============ -->
+<section class="k-hero wrap" aria-labelledby="k-title">
+  <div class="k-hero-text">
+    <h1 class="k-title" id="k-title" data-rise>From the file to your&nbsp;speakers</h1>
+    <p class="k-lede" data-rise style="--i:1">Kaseki is Honeycomb’s own audio engine, written in Rust. This is every layer a song passes through on the way out, and what each one does.</p>
+    <dl class="k-facts" data-rise style="--i:2">
+      <div><dt>5 s</dt><dd>of audio decoded ahead of what you hear</dd></div>
+      <div><dt>10 ms</dt><dd>fades on volume, pause and dropouts, so nothing clicks</dd></div>
+      <div><dt>2.33%</dt><dd>idle CPU, down from 5.86% before Kaseki</dd></div>
+    </dl>
+  </div>
+  <figure class="k-hero-film" data-rise style="--i:1">
+    <video src="../assets/ls911-9x11-inch-large-format-digital-camera.webm" poster="../assets/ls911-9x11-inch-large-format-digital-camera-poster.jpg" width="1280" height="720" muted loop playsinline autoplay preload="metadata" aria-label="A gramophone needle resting on a turning record"></video>
+    <figcaption>The needle is the easy part. Everything above it is software.</figcaption>
+  </figure>
+</section>
+
+<!-- ============ the stack ============ -->
+<section class="k-stack wrap section" id="stack" aria-labelledby="stack-h">
+  <div class="k-stack-head">
+    <h2 class="head" id="stack-h" data-reveal>The stack, top to bottom</h2>
+    <p class="k-stack-note" data-reveal style="--i:1">A song enters at the top as a file and leaves at the bottom as sound. Each layer only talks to the ones next to it.</p>
+  </div>
+  <div class="k-stack-grid">
+    <div class="k-stack-pin">
+      <ol class="k-layers" id="k-layers" aria-label="Layers">
+        <li><a href="#layer-ui" data-layer="ui"><span class="k-l-name">Interface</span><span class="k-l-thread">main thread</span></a></li>
+        <li><a href="#layer-player" data-layer="player"><span class="k-l-name">Player</span><span class="k-l-thread">audio thread</span></a></li>
+        <li><a href="#layer-decoder" data-layer="decoder"><span class="k-l-name">Decoder</span><span class="k-l-thread">decoder thread</span></a></li>
+        <li><a href="#layer-convert" data-layer="convert"><span class="k-l-name">Converter</span><span class="k-l-thread">decoder thread</span></a></li>
+        <li><a href="#layer-ring" data-layer="ring"><span class="k-l-name">Ring buffer</span><span class="k-l-thread">between threads</span></a></li>
+        <li><a href="#layer-callback" data-layer="callback"><span class="k-l-name">Output callback</span><span class="k-l-thread">real-time thread</span></a></li>
+        <li><a href="#layer-device" data-layer="device"><span class="k-l-name">Device</span><span class="k-l-thread">your hardware</span></a></li>
+      </ol>
+    </div>
+
+    <div class="k-details">
+      <article class="k-layer" id="layer-ui" data-layer="ui">
+        <h3>Interface</h3>
+        <p class="k-says">Asks for things and draws what it’s told.</p>
+        <p>The window you click in. It sends the player commands (play, pause, seek, change the queue) and redraws from the <code>player-tick</code> and <code>player-queue</code> events that come back. It never touches audio, so a busy track list can’t make a song stutter.</p>
+        <figure class="k-fig"><img src="../assets/app/window.jpg" width="1456" height="823" alt="Honeycomb’s window: the sidebar, the column browser, the track list with Off Kanagawa playing, and the Now Playing panel with synced lyrics" loading="lazy"><figcaption>Honeycomb’s window, on a test library.</figcaption></figure>
+        <dl class="k-spec"><div><dt>Runs on</dt><dd>The app’s main thread, in the system web view</dd></div><div><dt>Built with</dt><dd>TypeScript and Tauri commands</dd></div></dl>
+      </article>
+
+      <article class="k-layer" id="layer-player" data-layer="player">
+        <h3>Player</h3>
+        <p class="k-says">Decides what plays, and knows what is playing.</p>
+        <p>Owns the queue, shuffle and repeat. It tells the decoder which track to start and sends a plan of the tracks after it, then compares the decoder’s markers with the output’s sample counter to know exactly which song is playing and where. It reports to the system’s Now Playing controls and media keys.</p>
+        <p>It looks after the device too: every 2 seconds it checks whether the default output changed, and after 30 seconds paused or stopped it closes the output so your Mac’s audio hardware can sleep.</p>
+        <dl class="k-spec"><div><dt>Runs on</dt><dd>Its own thread, named <code>audio</code></dd></div><div><dt>Ticks</dt><dd>Every 200 ms while playing; not at all while idle</dd></div></dl>
+      </article>
+
+      <article class="k-layer" id="layer-decoder" data-layer="decoder">
+        <h3>Decoder</h3>
+        <p class="k-says">Turns files into numbers.</p>
+        <p>Opens each file, finds its audio track and decodes it into 32-bit floating-point samples: MP3, FLAC, AAC, ALAC, Ogg Vorbis, WAV and AIFF. Encoder delay and padding are trimmed, so the silence an encoder adds at each end never reaches you. Seeking drops the audio before the target, so a jump lands on the exact moment. Ogg files that are several streams joined end to end play through to the last one.</p>
+        <p>Every call into the decoder is wrapped so that a panic is caught. A broken file fails on its own and can’t take the app down with it.</p>
+        <dl class="k-spec"><div><dt>Runs on</dt><dd>Its own thread, named <code>decoder</code></dd></div><div><dt>Built with</dt><dd>symphonia, with gapless trimming on</dd></div></dl>
+      </article>
+
+      <article class="k-layer" id="layer-convert" data-layer="convert">
+        <h3>Converter</h3>
+        <p class="k-says">Makes the samples fit your device.</p>
+        <p>Channels first. Mono is copied to both speakers. Surround folds down to stereo: centre channels go to both sides and side and rear channels to their own side, each at −3 dB; the LFE channel is left out, and the mix is scaled so it can’t clip.</p>
+        <p>Then the rate, only if it has to. When your device can’t run at the file’s own rate, a band-limited sinc resampler converts it, and the filter’s start-up delay is trimmed so the timing still lines up with the markers.</p>
+        <figure class="k-fig k-fig-half"><img src="../assets/triangular-wave-and-square-wave-on-oscilloscope.jpg" width="1400" height="1292" alt="A triangle wave above a square wave on the screen of a Tektronix oscilloscope" loading="lazy"><figcaption>A triangle and a square wave on an oscilloscope. The converter changes how a signal is stored, never its shape.</figcaption></figure>
+        <dl class="k-spec"><div><dt>Runs on</dt><dd>The decoder thread</dd></div><div><dt>Built with</dt><dd>rubato: 256-tap sinc, Blackman-Harris window</dd></div></dl>
+      </article>
+
+      <article class="k-layer" id="layer-ring" data-layer="ring">
+        <h3>Ring buffer</h3>
+        <p class="k-says">Keeps five seconds in hand.</p>
+        <p>A lock-free queue between the decoder and the output, sized for 5 seconds at the output’s rate and channel count. The decoder tops it up whenever a second of room opens and checks every 250 ms while it’s full, so a slow disk or a busy moment has seconds to recover before you’d hear anything.</p>
+        <p>Skipping or seeking doesn’t wait for the buffer to drain: the output is told to throw away everything before a given sample and carry on from there.</p>
+        <figure class="k-fig k-fig-half"><img src="../assets/ampex-and-memorex-branded-ten-inch-spools.jpg" width="1400" height="1352" alt="Two ten-inch reels of magnetic tape on a reel-to-reel recorder" loading="lazy"><figcaption>Tape reels once did the same job: sound queued up, waiting for the head.</figcaption></figure>
+        <dl class="k-spec"><div><dt>Holds</dt><dd>rate × channels × 5 s, so 960,000 samples at 96 kHz stereo</dd></div><div><dt>Built with</dt><dd>rtrb, a single-producer, single-consumer ring</dd></div></dl>
+      </article>
+
+      <article class="k-layer" id="layer-callback" data-layer="callback">
+        <h3>Output callback</h3>
+        <p class="k-says">Copies, and nothing else.</p>
+        <p>The system calls this many times a second and it has to answer on time, so it only copies samples out of the buffer and applies the volume. No locks, no memory allocation, no file access. Volume follows a cubic curve, so the slider feels even from top to bottom.</p>
+        <p>Volume changes and pauses ramp over 10 ms. If the buffer ever runs dry, the last sound fades out over the same 10 ms instead of stopping dead with a click, and fades back in when audio returns.</p>
+        <div class="hc hc-frag hc-pb k-pb" data-ui>
+          <div class="hc-pb-controls">
+            <span class="hc-pb-btn small"><svg width="18" height="18" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h3.5c2.2 0 3.4 1.1 4.5 3l1 1.8c1.1 2 2.3 3.2 4.5 3.2H20"/><path d="M4 17h3.5c1.4 0 2.4-.5 3.2-1.4"/><path d="M13.3 8.4C14.1 7.5 15.1 7 16.5 7H20"/><path d="M17.5 4.5 20 7l-2.5 2.5"/><path d="M17.5 14.5 20 17l-2.5 2.5"/></g></svg></span>
+            <span class="hc-pb-btn"><svg width="20" height="20" viewBox="0 0 24 24"><rect x="5" y="5.5" width="2.6" height="13" rx="1" fill="currentColor"/><path d="M19 6.7v10.6a1 1 0 0 1-1.55.83L9.6 12.83a1 1 0 0 1 0-1.66l7.85-5.3A1 1 0 0 1 19 6.7z" fill="currentColor"/></svg></span>
+            <button type="button" class="hc-pb-btn play" id="k-play" aria-label="Pause"><svg class="i-pause" width="18" height="18" viewBox="0 0 24 24"><rect x="6.5" y="5" width="4" height="14" rx="1.2" fill="currentColor"/><rect x="13.5" y="5" width="4" height="14" rx="1.2" fill="currentColor"/></svg><svg class="i-play" width="18" height="18" viewBox="0 0 24 24"><path d="M8 5.5v13a1 1 0 0 0 1.52.85l10.4-6.5a1 1 0 0 0 0-1.7L9.52 4.65A1 1 0 0 0 8 5.5z" fill="currentColor"/></svg></button>
+            <span class="hc-pb-btn"><svg width="20" height="20" viewBox="0 0 24 24"><rect x="16.4" y="5.5" width="2.6" height="13" rx="1" fill="currentColor"/><path d="M5 6.7v10.6a1 1 0 0 0 1.55.83l7.85-5.3a1 1 0 0 0 0-1.66l-7.85-5.3A1 1 0 0 0 5 6.7z" fill="currentColor"/></svg></span>
+            <span class="hc-pb-btn small"><svg width="18" height="18" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3.5 20 6.5l-3 3"/><path d="M4 11.5v-1a4 4 0 0 1 4-4h12"/><path d="M7 20.5l-3-3 3-3"/><path d="M20 12.5v1a4 4 0 0 1-4 4H4"/></g></svg></span>
+          </div>
+          <label class="k-vol"><span>Volume</span><input type="range" id="k-vol" min="0" max="100" value="80"><output id="k-gain" for="k-vol">gain 0.51</output></label>
+        </div>
+        <p class="k-try">Try the slider: the number is the gain the callback multiplies each sample by, the slider’s position cubed.</p>
+        <dl class="k-spec"><div><dt>Runs on</dt><dd>The system’s real-time audio thread</dd></div><div><dt>Built with</dt><dd>cpal, writing f32, i16, i32 or u16 samples</dd></div></dl>
+      </article>
+
+      <article class="k-layer" id="layer-device" data-layer="device">
+        <h3>Device</h3>
+        <p class="k-says">Your speakers, headphones or interface.</p>
+        <p>Kaseki opens the system’s default output, at the file’s own sample rate whenever the device supports it, so the samples go out unchanged. That’s bit-perfect, and a test checks it bit for bit. If opening at that rate fails, it falls back to the device’s default rate. If the stream reports an error, the player reopens it.</p>
+        <figure class="k-fig"><img src="../assets/p21653a-loudspeaker-side-view.jpg" width="1400" height="776" alt="A small loudspeaker from the side, with its magnet, metal frame, cone and connecting wires" loading="lazy"><figcaption>Where the samples end up: a magnet, a coil and a cone.</figcaption></figure>
+        <dl class="k-spec"><div><dt>Talks to</dt><dd>Core Audio on macOS, WASAPI on Windows</dd></div><div><dt>Opens</dt><dd>On first play, and closes after 30 s idle</dd></div></dl>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ============ gapless ============ -->
+<section class="k-gapless wrap section" id="gapless" aria-labelledby="gapless-h">
+  <div class="k-gap-head">
+    <h2 class="head" id="gapless-h">Gapless, to the sample</h2>
+    <p>The player sends the decoder a plan: the track to play now and the ones after it. When a track ends, the decoder doesn’t stop and reopen anything. It carries straight on with the next file, writing it into the same buffer, and leaves a marker at the exact sample where the new track begins.</p>
+  </div>
+  <figure class="k-buffer" aria-label="Two tracks in the ring buffer, with a marker where the second begins">
+    <div class="k-buf-bar" aria-hidden="true">
+      <span class="k-buf-a"><b>Off Kanagawa</b><i>4:38 at 96 kHz</i></span>
+      <span class="k-buf-mark"></span>
+      <span class="k-buf-b"><b>Three Boats</b><i>starts here</i></span>
+      <span class="k-buf-head" id="k-head"></span>
+    </div>
+    <figcaption>
+      <span><b>The marker</b> sits at sample 53,376,000, counting from the start of Off Kanagawa: 278 seconds × 96,000 samples a second × 2 channels.</span>
+      <span><b>The player</b> watches the output’s count of samples played. When it passes the marker, the track list moves on, with nothing missing in between.</span>
+    </figcaption>
+  </figure>
+  <p class="k-gap-note">Each marker also carries an epoch. When you skip or change the queue, the epoch goes up, and markers left over from the old plan are ignored. Change the queue, shuffle or repeat in the last two seconds of a song and the plan is rebuilt, so the right track still comes next.</p>
+</section>
+
+<!-- ============ output rate ============ -->
+<section class="k-rate wrap section" id="rate" aria-labelledby="rate-h">
+  <div class="k-rate-grid">
+    <div class="k-rate-text">
+      <h2 class="head" id="rate-h">Which rate it opens at</h2>
+      <p>Resampling is the one step that changes the signal, so Kaseki avoids it. For each file it picks the output rate in this order:</p>
+      <ol class="k-rules">
+        <li>The file’s own rate, if the device can run at it.</li>
+        <li>An exact fraction of it, no lower than 44.1 kHz: a 192 kHz file plays at 96 kHz on a MacBook’s headphone jack.</li>
+        <li>An exact multiple of it: 22.05 kHz becomes 44.1 kHz.</li>
+        <li>The highest common rate up to the file’s that the device offers above its default.</li>
+        <li>Otherwise the device’s default rate.</li>
+      </ol>
+      <figure class="k-fig k-fig-np"><img src="../assets/app/np-tech.jpg" width="259" height="102" alt="Honeycomb’s Now Playing details for Off Kanagawa: four and a half stars, FLAC, 340 kbps, 96.0 kHz, played 148 times" loading="lazy"><figcaption>The Now Playing panel shows each file’s rate.</figcaption></figure>
+    </div>
+    <div class="k-picker" id="k-picker">
+      <h3 class="k-picker-h">Try it</h3>
+      <div class="k-result" aria-live="polite">
+        <p class="k-result-rate">Opens at <span id="k-out">96 kHz</span></p>
+        <p class="k-result-why" id="k-why">The device can run at the file’s own rate, so nothing is resampled.</p>
+        <div class="hc hc-frag k-tech" data-ui><span id="k-tech">FLAC · 96.0 kHz → output 96.0 kHz, no resampling</span></div>
+      </div>
+      <fieldset>
+        <legend>The file</legend>
+        <div class="k-chips" id="k-file">
+          <button type="button" data-rate="22050">22.05 kHz</button>
+          <button type="button" data-rate="44100">44.1 kHz</button>
+          <button type="button" data-rate="48000">48 kHz</button>
+          <button type="button" data-rate="88200">88.2 kHz</button>
+          <button type="button" data-rate="96000" class="is-on">96 kHz</button>
+          <button type="button" data-rate="192000">192 kHz</button>
+        </div>
+      </fieldset>
+      <fieldset>
+        <legend>Your device can run at</legend>
+        <div class="k-chips" id="k-device">
+          <button type="button" data-ranges="48000-48000" data-default="48000">48 kHz only</button>
+          <button type="button" data-ranges="44100-44100,48000-48000" data-default="48000">44.1 or 48 kHz</button>
+          <button type="button" data-ranges="44100-96000" data-default="48000" class="is-on">44.1 to 96 kHz</button>
+          <button type="button" data-ranges="44100-192000" data-default="48000">44.1 to 192 kHz</button>
+        </div>
+      </fieldset>
+
+    </div>
+  </div>
+</section>
+
+<!-- ============ when things go wrong ============ -->
+<section class="k-wrong wrap section" aria-labelledby="wrong-h">
+  <h2 class="head" id="wrong-h">When things go wrong</h2>
+  <dl class="k-cases">
+    <div><dt>You unplug your headphones</dt><dd>The player notices the device has gone and pauses, instead of carrying on through your speakers. Plug them back in and press play.</dd></div>
+    <div><dt>The default output changes</dt><dd>Checked every 2 seconds. Kaseki reopens on the new device and picks up where it was.</dd></div>
+    <div><dt>The disk is slow for a moment</dt><dd>Five seconds are already decoded. If the buffer still runs dry, the sound fades out over 10 ms rather than clicking, and fades back in.</dd></div>
+    <div><dt>A file is broken</dt><dd>The decoder’s crash is caught. That one file fails with an error, and the app keeps running.</dd></div>
+  </dl>
+</section>
+
+<!-- ============ idle ============ -->
+<section class="k-idle wrap section" aria-labelledby="idle-h">
+  <div class="k-idle-grid">
+    <div class="k-idle-text">
+      <h2 class="head" id="idle-h">Quiet when nothing plays</h2>
+      <p>With Kaseki, the output isn’t opened until something plays, it closes after 30 seconds paused or stopped, and the player stops ticking while idle. Sampled at rest, the decoder and audio threads sit blocked the whole time.</p>
+      <p>On the current build, idle CPU is about 1–2% of one core. At that level a 30-second sample is mostly noise.</p>
+      <p class="k-src">Measured 19 October 2026 on an M1 Pro MacBook Pro in Low Power Mode, with a 100,000-track library: the app plus its web view processes, over 30 seconds at rest.</p>
+    </div>
+    <figure class="k-chart" aria-label="Idle CPU: 5.86% before Kaseki, 2.33% after">
+      <div class="k-bar-row"><span class="k-bar-label">Before Kaseki</span><span class="k-bar-track"><span class="k-bar-fill k-before" style="--w:100%"></span></span><span class="k-bar-val">5.86%</span></div>
+      <div class="k-bar-row"><span class="k-bar-label">With Kaseki</span><span class="k-bar-track"><span class="k-bar-fill k-after" style="--w:39.8%"></span></span><span class="k-bar-val">2.33%</span></div>
+      <table class="k-table">
+        <caption class="sr-only">Idle CPU by process</caption>
+        <thead><tr><th scope="col"></th><th scope="col">App</th><th scope="col">Web view</th><th scope="col">GPU</th><th scope="col">Total</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">Before Kaseki</th><td>2.43%</td><td>2.50%</td><td>0.93%</td><td>5.86%</td></tr>
+          <tr><th scope="row">With Kaseki</th><td>1.03%</td><td>0.87%</td><td>0.43%</td><td>2.33%</td></tr>
+        </tbody>
+      </table>
+    </figure>
+  </div>
+</section>
+
+</main>
+
+<footer class="board k-board">
+  <div class="tile t-statement">
+    <p class="tile-big">Kaseki is part of Honeycomb, free and open source under GPL-3.0-or-later.</p>
+    <p class="tile-legal">Honeycomb is an independent project. © 2026 n1ji.</p>
+  </div>
+  <nav class="tile t-nav" aria-label="Footer">
+    <a class="link" href="#stack">The stack</a>
+    <a class="link" href="#gapless">Gapless</a>
+    <a class="link" href="#rate">Output rate</a>
+    <a class="link" href="../">Honeycomb</a>
+    <a class="link" href="../privacy/">Privacy</a>
+    <a class="link" href="../terms/">Terms</a>
+  </nav>
+  <div class="tile t-status">
+    <p><b>Engine:</b> Kaseki, since 19 October 2026.</p>
+    <p><b>Tests:</b> <code>cargo test --lib kaseki</code></p>
+  </div>
+  <div class="tile t-mail"><a class="tile-mail link-plain" href="mailto:hello@n1ji.dev">hello@n1ji.dev</a></div>
+  <div class="tile t-word"><span class="wordmark-big">Kaseki</span></div>
+  <a class="tile t-go" href="../"><span>Back to Honeycomb</span>
+    <svg viewBox="0 0 48 48" aria-hidden="true"><path d="M38 24H10M22 12 10 24l12 12" fill="none" stroke="currentColor" stroke-width="4"/></svg>
+  </a>
+  <p class="credits">Pictures: <a href="https://commons.wikimedia.org/wiki/File:Triangular_wave_and_square_wave_on_oscilloscope_screen.jpg">“Triangular wave and square wave on oscilloscope screen”</a> by Xato, <a href="https://creativecommons.org/publicdomain/zero/1.0/">CC0</a>; <a href="https://commons.wikimedia.org/wiki/File:Ampex-_and_Memorex-branded_ten-inch_spools_with_magnetic_tape_on_Akai_reel_to_reel_audio_recorder.jpg">“Ampex- and Memorex-branded ten-inch spools with magnetic tape on Akai reel to reel audio recorder”</a> by Sameer Verma, <a href="https://creativecommons.org/licenses/by-sa/2.0/">CC BY-SA 2.0</a>; <a href="https://commons.wikimedia.org/wiki/File:P21653A_loudspeaker_side_view.jpg">“P21653A loudspeaker side view”</a> by Mister rf, <a href="https://creativecommons.org/licenses/by-sa/4.0/">CC BY-SA 4.0</a>; all via Wikimedia Commons. Film: <a href="https://commons.wikimedia.org/wiki/File:LS911_9x11_inch_large_format_digital_camera_and_the_old_record_player.webm">“LS911 large format digital camera and the old record player”</a> by LargeSense, <a href="https://creativecommons.org/licenses/by/3.0/">CC BY 3.0</a>, via Wikimedia Commons. The app screenshots show a test library. Figures on this page come from Honeycomb’s source and its performance notes.</p>
+</footer>
+
+<script src="kaseki.js?v=1792592000" defer></script>
+</body>
+</html>
