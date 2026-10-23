@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Albert+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=1792600100">
+<link rel="stylesheet" href="styles.css?v=1792700100">
 <script>document.documentElement.classList.add('js')</script>
 </head>
 <body>
@@ -21,6 +21,7 @@
       <header class="bar">
         <a class="wordmark" href="#top"><img src="assets/honeycomb-icon.png" width="28" height="28" alt="">Honeycomb</a>
         <nav class="bar-links" aria-label="Main">
+          <a class="link" href="#demo">Demo</a>
           <a class="link" href="#features">Features</a>
           <a class="link" href="#kaseki">Kaseki</a>
           <a class="link" href="#switching">Switching</a>
@@ -178,6 +179,24 @@
       </div>
     </div>
   </div>
+</section>
+
+<!-- ============ demo: a recording of the real app ============ -->
+<section class="demo wrap section" id="demo" aria-labelledby="demo-h">
+  <div class="demo-top">
+    <h2 class="head" id="demo-h" data-reveal>Watch the real app run</h2>
+    <div class="demo-aside" data-reveal style="--i:1">
+      <p>A screen recording of Honeycomb 0.1.0 on a Mac: scrolling and searching 100,000 tracks, then picking albums and playing them.</p>
+      <button class="demo-toggle" type="button" aria-controls="demo-video" hidden>Pause</button>
+    </div>
+  </div>
+  <figure class="demo-film" data-reveal style="--i:2">
+    <video id="demo-video" width="1600" height="900" poster="assets/demo/honeycomb-demo-poster.jpg" muted loop playsinline controls preload="metadata" aria-label="Honeycomb scrolling and searching a 100,000-track library, filtering by genre, then playing albums with their cover art in the Now Playing panel">
+      <source src="assets/demo/honeycomb-demo.webm" type="video/webm">
+      <source src="assets/demo/honeycomb-demo.mp4" type="video/mp4">
+    </video>
+    <figcaption>Scrolling and search run at real speed. The pauses between clicks are trimmed.</figcaption>
+  </figure>
 </section>
 
 <!-- ============ measured: the speed numbers ============ -->
@@ -398,9 +417,9 @@
   <a class="tile t-go" href="https://github.com/n1ji/honeycomb"><span>Get the alpha</span>
     <svg viewBox="0 0 48 48" aria-hidden="true"><path d="M10 38 38 10M16 10h22v22" fill="none" stroke="currentColor" stroke-width="4"/></svg>
   </a>
-  <p class="credits">Pictures: album covers are paintings and prints from the <a href="https://www.artic.edu/">Art Institute of Chicago</a>, public domain (CC0): <a href="https://www.artic.edu/artworks/89503">Hokusai, “Under the Wave off Kanagawa”</a>; <a href="https://www.artic.edu/artworks/56905">Whistler, “Nocturne: Blue and Gold, Southampton Water”</a>; <a href="https://www.artic.edu/artworks/16818">Homer, “Prout’s Neck, Breaking Wave”</a>; <a href="https://www.artic.edu/artworks/61128">Toulouse-Lautrec, “At the Moulin Rouge”</a>; <a href="https://www.artic.edu/artworks/154235">Munch, “The Girl by the Window”</a>; <a href="https://www.artic.edu/artworks/158421">“Honeycomb Centre” Quilt</a>; <a href="https://www.artic.edu/artworks/18642">Hollar, “A Moth, Butterflies, and Bees”</a>. Honeycomb photograph: <a href="https://commons.wikimedia.org/wiki/File:Pangetkon,_Shan_Hills,_Myanmar,_Fresh_organic_honey_in_honeycombs.jpg">“Fresh organic honey in honeycombs”</a> by Vyacheslav Argenberg, <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>, via Wikimedia Commons. Gramophone film: <a href="https://commons.wikimedia.org/wiki/File:LS911_9x11_inch_large_format_digital_camera_and_the_old_record_player.webm">“LS911 large format digital camera and the old record player”</a> by LargeSense, <a href="https://creativecommons.org/licenses/by/3.0/">CC BY 3.0</a>, via Wikimedia Commons. The library on this page is made up, and the app screenshots were taken on a test library; the paintings stand in for album art.</p>
+  <p class="credits">Pictures: album covers are paintings and prints from the <a href="https://www.artic.edu/">Art Institute of Chicago</a>, public domain (CC0): <a href="https://www.artic.edu/artworks/89503">Hokusai, “Under the Wave off Kanagawa”</a>; <a href="https://www.artic.edu/artworks/56905">Whistler, “Nocturne: Blue and Gold, Southampton Water”</a>; <a href="https://www.artic.edu/artworks/16818">Homer, “Prout’s Neck, Breaking Wave”</a>; <a href="https://www.artic.edu/artworks/61128">Toulouse-Lautrec, “At the Moulin Rouge”</a>; <a href="https://www.artic.edu/artworks/154235">Munch, “The Girl by the Window”</a>; <a href="https://www.artic.edu/artworks/158421">“Honeycomb Centre” Quilt</a>; <a href="https://www.artic.edu/artworks/18642">Hollar, “A Moth, Butterflies, and Bees”</a>. Honeycomb photograph: <a href="https://commons.wikimedia.org/wiki/File:Pangetkon,_Shan_Hills,_Myanmar,_Fresh_organic_honey_in_honeycombs.jpg">“Fresh organic honey in honeycombs”</a> by Vyacheslav Argenberg, <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>, via Wikimedia Commons. Gramophone film: <a href="https://commons.wikimedia.org/wiki/File:LS911_9x11_inch_large_format_digital_camera_and_the_old_record_player.webm">“LS911 large format digital camera and the old record player”</a> by LargeSense, <a href="https://creativecommons.org/licenses/by/3.0/">CC BY 3.0</a>, via Wikimedia Commons. The library on this page is made up, and the app screenshots and demo video were made on generated test libraries; the paintings stand in for album art.</p>
 </footer>
 
-<script src="app.js?v=1792600000" defer></script>
+<script src="app.js?v=1792700100" defer></script>
 </body>
 </html>

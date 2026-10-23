@@ -304,6 +304,21 @@
   addEventListener('resize', () => { moveReel(); paint(); });
   moveReel();
 
+  // ---------- the demo recording: plays while on screen, with its own pause ----------
+  const demo = $('#demo-video'), demoBtn = $('.demo-toggle');
+  if (demo && demoBtn) {
+    demo.controls = false;
+    demoBtn.hidden = false;
+    let wanted = !reduce;
+    const label = () => { demoBtn.textContent = demo.paused ? 'Play' : 'Pause'; };
+    demo.addEventListener('play', label); demo.addEventListener('pause', label);
+    demoBtn.addEventListener('click', () => { wanted = demo.paused; if (wanted) demo.play().catch(() => {}); else demo.pause(); });
+    if ('IntersectionObserver' in window) {
+      new IntersectionObserver(([en]) => { if (en.isIntersecting && wanted) demo.play().catch(() => {}); else if (!en.isIntersecting) demo.pause(); }, { threshold: 0.35 }).observe(demo);
+    } else if (wanted) demo.play().catch(() => {});
+    label();
+  }
+
   // ---------- entrances ----------
   const targets = $$('[data-reveal], .letter');
   if ('IntersectionObserver' in window) {

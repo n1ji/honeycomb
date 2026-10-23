@@ -683,3 +683,18 @@ button { background: none; border: 0; padding: 0; cursor: pointer; }
   .cta .cta-line { grid-column: 1 / span 8; }
   .cta .cta-note { grid-column: 9 / -1; margin: 0 0 0.6em; max-width: 30ch; }
 }
+
+/* ---------------- demo: the screen recording ---------------- */
+.demo-top { display: grid; gap: 1.25rem; margin-bottom: 40px; }
+.demo-aside { display: grid; gap: 1rem; justify-items: start; }
+.demo-aside p { max-width: 40ch; }
+.demo-toggle { min-height: 2.75rem; padding: 0 1.1rem; background: var(--surface-2); border-radius: var(--radius); font-size: var(--step-small); font-weight: 600; transition: background-color var(--t-hover) ease, transform var(--t-press) var(--ease-out); }
+.demo-toggle:hover { background: #2e2720; }
+.demo-toggle:active { transform: scale(0.97); }
+.demo-film video { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; background: var(--surface); border-radius: var(--radius); }
+.demo-film figcaption { font-size: var(--step-small); color: var(--muted); margin-top: 12px; }
+@media (min-width: 900px) {
+  .demo-top { grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--gutter); align-items: end; margin-bottom: 56px; }
+  .demo-top h2 { grid-column: 1 / span 6; max-width: 8em; }
+  .demo-aside { grid-column: 8 / span 5; }
+}
