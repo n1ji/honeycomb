@@ -5,6 +5,7 @@ mod lyrics;
 mod media;
 mod meta;
 mod models;
+mod net;
 mod player;
 mod scanner;
 mod scrobble;

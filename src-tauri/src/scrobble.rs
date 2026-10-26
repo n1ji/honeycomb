@@ -232,8 +232,9 @@ fn lastfm_call(cfg: &Config, method: &str, mut params: Vec<(String, String)>, sk
     params.push(("format".into(), "json".into()));
     let form: Vec<(&str, &str)> = params.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
     let body: Value = match agent().post(&cfg.lastfm_api).send_form(&form) {
-        Ok(r) => r.into_json().map_err(|e| SendError::Retry(format!("Last.fm sent an unreadable answer: {e}")))?,
-        Err(ureq::Error::Status(code, r)) => match r.into_json::<Value>() {
+        Ok(r) => crate::net::read_json(r, crate::net::SCROBBLE_MAX)
+            .map_err(|e| SendError::Retry(format!("Last.fm sent an unreadable answer: {e}")))?,
+        Err(ureq::Error::Status(code, r)) => match crate::net::read_json::<Value>(r, crate::net::SCROBBLE_MAX) {
             Ok(v) if v.get("error").is_some() => v,
             _ => return Err(SendError::Retry(format!("Last.fm answered with HTTP {code}"))),
         },
@@ -305,8 +306,7 @@ fn lb_post(cfg: &Config, token: &str, body: Value) -> Result<(), SendError> {
     match agent().post(&url).set("Authorization", &format!("Token {token}")).send_json(body) {
         Ok(_) => Ok(()),
         Err(ureq::Error::Status(code, r)) => {
-            let detail = r
-                .into_json::<Value>()
+            let detail = crate::net::read_json::<Value>(r, crate::net::SCROBBLE_MAX)
                 .ok()
                 .and_then(|v| v.get("error").and_then(Value::as_str).map(str::to_string))
                 .unwrap_or_else(|| format!("HTTP {code}"));
@@ -537,8 +537,8 @@ pub fn listenbrainz_connect(conn: &Connection, token: &str) -> Result<String, St
     let cfg = Config::from_env();
     let url = format!("{}/1/validate-token", cfg.listenbrainz_api.trim_end_matches('/'));
     let v: Value = match agent().get(&url).set("Authorization", &format!("Token {token}")).call() {
-        Ok(r) => r.into_json().map_err(|e| e.to_string())?,
-        Err(ureq::Error::Status(_, r)) => r.into_json().unwrap_or(Value::Null),
+        Ok(r) => crate::net::read_json(r, crate::net::SCROBBLE_MAX).map_err(|e| format!("ListenBrainz: {e}"))?,
+        Err(ureq::Error::Status(_, r)) => crate::net::read_json(r, crate::net::SCROBBLE_MAX).unwrap_or(Value::Null),
         Err(e) => return Err(format!("Couldn't reach ListenBrainz: {e}")),
     };
     if v.get("valid").and_then(Value::as_bool) != Some(true) {

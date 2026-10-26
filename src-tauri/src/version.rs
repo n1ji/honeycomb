@@ -157,7 +157,7 @@ fn check_release_for(github: &str, commit: &str) -> Status {
     let agent = agent();
     let api = format!("https://api.github.com/repos/{github}");
     let releases: Vec<Release> = match agent.get(&format!("{api}/releases?per_page=10")).call() {
-        Ok(r) => match r.into_json() {
+        Ok(r) => match crate::net::read_json(r, crate::net::GITHUB_MAX) {
             Ok(v) => v,
             Err(_) => {
                 s.message = "GitHub sent an answer Honeycomb couldn't read.".into();
@@ -187,7 +187,7 @@ fn check_release_for(github: &str, commit: &str) -> Status {
         s.url = latest.html_url.clone();
     }
     let cmp: Compare = match agent.get(&format!("{api}/compare/{commit}...{}", latest.tag_name)).call() {
-        Ok(r) => match r.into_json() {
+        Ok(r) => match crate::net::read_json(r, crate::net::GITHUB_MAX) {
             Ok(c) => c,
             Err(_) => {
                 s.message = "GitHub sent an answer Honeycomb couldn't read.".into();

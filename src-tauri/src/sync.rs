@@ -171,10 +171,32 @@ fn native(dest: &Path, rel: &str) -> PathBuf {
     rel.split('/').fold(dest.to_path_buf(), |p, c| p.join(c))
 }
 
+/// A path relative to the destination made only of ordinary names: no `..`,
+/// no root or drive, no `\`. Anything else in a manifest didn't come from
+/// Honeycomb.
+fn safe_rel(rel: &str) -> bool {
+    !rel.is_empty() && rel.split('/').all(|c| !c.is_empty() && c != "." && c != ".." && !c.contains(['\\', ':']))
+}
+
+/// Whether `path`'s folder really is inside `dest`, after following
+/// symlinks (a drive could link a folder to somewhere else).
+fn inside(dest: &Path, path: &Path) -> bool {
+    match (dest.canonicalize(), path.parent().map(fs::canonicalize)) {
+        (Ok(d), Some(Ok(p))) => p.starts_with(d),
+        _ => false,
+    }
+}
+
 // ---------- manifest ----------
 
+/// The manifest lives on the device, so anyone with the device can edit it:
+/// entries that could point outside the destination are dropped.
 fn load_manifest(dest: &Path) -> Manifest {
-    fs::read(dest.join(MANIFEST)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+    let mut m: Manifest =
+        fs::read(dest.join(MANIFEST)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+    m.files.retain(|rel, _| safe_rel(rel));
+    m.playlists.retain(|p| safe_rel(p) && !p.contains('/') && p.ends_with(".m3u8"));
+    m
 }
 
 fn save_manifest(dest: &Path, m: &Manifest) -> Result<()> {
@@ -411,6 +433,10 @@ pub fn run(
     // Remove first, to make room.
     for rel in &stale {
         let path = native(&dest, rel);
+        if !inside(&dest, &path) {
+            m.files.remove(rel);
+            continue;
+        }
         match fs::remove_file(&path) {
             Ok(()) => report.removed += 1,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -429,7 +455,12 @@ pub fn run(
     let mut last_save = Instant::now();
     for (i, (t, rel, size, mtime)) in todo.iter().enumerate() {
         progress(Progress { done: i, total, current: rel.clone() });
-        match copy_file(Path::new(&t.path), &native(&dest, rel), cancel) {
+        let target = native(&dest, rel);
+        if target.parent().is_some_and(Path::exists) && !inside(&dest, &target) {
+            report.failed.push(format!("{}: leads outside the destination", target.display()));
+            continue;
+        }
+        match copy_file(Path::new(&t.path), &target, cancel) {
             Ok(bytes) => {
                 report.copied += 1;
                 report.bytes_copied += bytes;
@@ -465,7 +496,10 @@ pub fn run(
             }
         }
         for old in m.playlists.iter().filter(|p| !written.contains(p)) {
-            let _ = fs::remove_file(dest.join(old));
+            let path = native(&dest, old);
+            if inside(&dest, &path) {
+                let _ = fs::remove_file(path);
+            }
         }
         report.playlists = written.len();
         m.playlists = written;
@@ -614,6 +648,61 @@ mod tests {
             .filter(|e| e.path().to_string_lossy().ends_with(".part"))
             .collect();
         assert!(leftovers.is_empty(), "{leftovers:?}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_tampered_manifest_cannot_reach_outside() {
+        let (root, mut conn, ids) = setup("tampered");
+        let stick = root.join("stick");
+        let outside = root.join("outside.txt");
+        let elsewhere = root.join("elsewhere.m3u8");
+        fs::write(&outside, "keep me").unwrap();
+        fs::write(&elsewhere, "keep me too").unwrap();
+        // A manifest someone edited on the drive.
+        let manifest = serde_json::json!({
+            "files": {
+                "../outside.txt": { "trackId": 1, "size": 7, "mtime": 0 },
+                "Artist/../../outside.txt": { "trackId": 1, "size": 7, "mtime": 0 },
+                "..\\outside.txt": { "trackId": 1, "size": 7, "mtime": 0 },
+            },
+            "playlists": [elsewhere.to_string_lossy(), "../elsewhere.m3u8"],
+        });
+        fs::write(stick.join(MANIFEST), manifest.to_string()).unwrap();
+        let only = playlist(&mut conn, "Only", &ids[..1]);
+        let p = Profile { dest: stick.to_string_lossy().into(), whole_library: false, playlists: vec![only], remove_unselected: true };
+        let r = sync(&conn, &p);
+        assert_eq!((r.copied, r.removed), (1, 0), "{r:?}");
+        assert_eq!(fs::read_to_string(&outside).unwrap(), "keep me");
+        assert_eq!(fs::read_to_string(&elsewhere).unwrap(), "keep me too");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A folder on the drive that links elsewhere is never written through
+    /// or deleted through.
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_folders_on_the_drive_are_not_followed() {
+        let (root, conn, _) = setup("symlink");
+        let stick = root.join("stick");
+        let victim = root.join("victim");
+        fs::create_dir_all(victim.join("Album")).unwrap();
+        fs::write(victim.join("Album/01 One.mp3"), vec![0u8; 1000]).unwrap();
+        std::os::unix::fs::symlink(&victim, stick.join("Artist")).unwrap();
+        let manifest = serde_json::json!({
+            "files": { "Artist/Album/01 One.mp3": { "trackId": 999, "size": 1000, "mtime": 0 } },
+        });
+        fs::write(stick.join(MANIFEST), manifest.to_string()).unwrap();
+        let p = Profile { dest: stick.to_string_lossy().into(), whole_library: false, playlists: vec![], remove_unselected: true };
+        // Nothing chosen: the manifest's file is "stale" and would be removed.
+        let r = sync(&conn, &p);
+        assert_eq!(r.removed, 0, "{r:?}");
+        assert!(victim.join("Album/01 One.mp3").exists());
+        // Syncing the library doesn't write through the link either.
+        let p = Profile { whole_library: true, ..p };
+        let r = sync(&conn, &p);
+        assert!(r.failed.iter().any(|f| f.contains("outside the destination")), "{r:?}");
+        assert_eq!(fs::read(victim.join("Album/01 One.mp3")).unwrap(), vec![0u8; 1000]);
         let _ = fs::remove_dir_all(&root);
     }
 
