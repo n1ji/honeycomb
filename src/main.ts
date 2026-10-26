@@ -91,6 +91,7 @@ async function main() {
   await store.loadTracks();
   const loaded = performance.now();
   await api.cmd("emit");
+  void api.uiReady(store.tracks.size);
   if (await perfEnabled()) void runBenchmark(mainStart, loaded);
 
   // Pick up files changed while the app was closed.

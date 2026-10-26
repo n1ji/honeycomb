@@ -6,6 +6,7 @@ import { run } from "./actions";
 import { button, modal } from "./dialogs";
 import { openColumnsCustomizer, openPlayerBarCustomizer, setLayoutSetting } from "./customize";
 import { openImporter } from "./importer";
+import { scrobblingSection } from "./scrobbling";
 
 export const ACCENTS = ["#f5a623", "#e8590c", "#e03131", "#d6336c", "#ae3ec9", "#4c6ef5", "#1c7ed6", "#0ca678", "#74b816"];
 
@@ -260,6 +261,7 @@ export async function openSettings() {
       }),
     ),
     h("p", { class: "muted" }, `${store.tracks.size.toLocaleString()} tracks in library. Honeycomb never moves or deletes your files.`),
+    ...scrobblingSection(),
     h("h3", {}, "Lyrics"),
     lyricsToggle(),
     h(

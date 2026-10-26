@@ -17,7 +17,7 @@ const BATCH: usize = 200;
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct Progress {
+pub(crate) struct Progress {
     done: usize,
     total: usize,
     current: String,
@@ -25,11 +25,11 @@ struct Progress {
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct Finished {
-    added_or_updated: usize,
-    removed: usize,
-    errors: usize,
-    inboxed: usize,
+pub(crate) struct Finished {
+    pub added_or_updated: usize,
+    pub removed: usize,
+    pub errors: usize,
+    pub inboxed: usize,
 }
 
 /// Scan every library folder on a background thread. Unchanged files (same
@@ -58,7 +58,7 @@ pub fn spawn_scan(app: AppHandle, db_path: PathBuf, scanning: Arc<AtomicBool>) {
     });
 }
 
-fn scan(db_path: &Path, progress: &dyn Fn(Progress)) -> Result<Finished> {
+pub(crate) fn scan(db_path: &Path, progress: &dyn Fn(Progress)) -> Result<Finished> {
     let started = std::time::Instant::now();
     let conn = db::open(db_path)?;
     let folders = db::folders(&conn)?;

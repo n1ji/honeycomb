@@ -5,6 +5,7 @@ import { openMenu } from "./menu";
 import { openSettings } from "./settings";
 import { openSmartEditor } from "./smarteditor";
 import { saveSetting } from "./layout";
+import { openSync } from "./sync";
 import { mountUpdateBulb } from "./update";
 
 const DRAG_TYPE = "application/x-honeycomb-tracks";
@@ -29,6 +30,7 @@ export function mountSidebar() {
       "div",
       { class: "sidebar-footer" },
       h("button", { class: "icon-btn", title: "Settings", onclick: () => openSettings() }, "⚙ Settings"),
+      h("button", { class: "icon-btn", title: "Sync to a player or flash drive", onclick: () => openSync() }, "⇅ Sync"),
       mountUpdateBulb(),
     ),
   );

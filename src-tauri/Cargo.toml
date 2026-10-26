@@ -39,6 +39,10 @@ unicode-normalization = "0.1"
 # System media keys and now-playing info (macOS Now Playing, MPRIS on Linux, SMTC on Windows).
 # LRCLIB lyrics lookups.
 ureq = { version = "2", features = ["json"] }
+# Last.fm request signatures are MD5 hashes.
+md5 = "0.7"
+# Free space on a sync destination.
+fs2 = "0.4"
 souvlaki = { version = "0.8", default-features = false, features = ["use_zbus"] }
 
 [dev-dependencies]

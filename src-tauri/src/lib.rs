@@ -7,7 +7,10 @@ mod meta;
 mod models;
 mod player;
 mod scanner;
+mod scrobble;
 mod smart;
+mod smoke;
+mod sync;
 mod version;
 
 use std::collections::HashMap;
@@ -27,6 +30,8 @@ pub struct AppState {
     db_path: PathBuf,
     player: PlayerHandle,
     scanning: Arc<AtomicBool>,
+    /// Set to stop a running sync.
+    sync_cancel: Arc<AtomicBool>,
 }
 
 type CmdResult<T> = Result<T, String>;
@@ -139,13 +144,17 @@ fn edit_tags(state: State<AppState>, ids: Vec<i64>, edit: TagEdit) -> CmdResult<
 
 // ---------- settings ----------
 
+/// All settings but secrets (session keys, tokens), which stay in the backend.
 #[tauri::command]
 fn get_settings(state: State<AppState>) -> CmdResult<HashMap<String, String>> {
-    Ok(db::settings(&state.conn()).map_err(err)?.into_iter().collect())
+    Ok(db::settings(&state.conn()).map_err(err)?.into_iter().filter(|(k, _)| !k.starts_with("secret.")).collect())
 }
 
 #[tauri::command]
 fn set_setting(state: State<AppState>, key: String, value: String) -> CmdResult<()> {
+    if key.starts_with("secret.") {
+        return Err("not a setting the UI can change".into());
+    }
     db::set_setting(&state.conn(), &key, &value).map_err(err)
 }
 
@@ -367,11 +376,112 @@ async fn get_lyrics(app: AppHandle, track_id: i64) -> CmdResult<lyrics::Lyrics> 
     .map_err(err)?
 }
 
+// ---------- scrobbling ----------
+
+#[tauri::command]
+fn scrobble_status(state: State<AppState>) -> scrobble::Status {
+    scrobble::status(&state.conn())
+}
+
+/// Returns (token, url): open the URL, then call `lastfm_finish` with the token.
+#[tauri::command]
+async fn lastfm_begin() -> CmdResult<(String, String)> {
+    tauri::async_runtime::spawn_blocking(scrobble::lastfm_begin).await.map_err(err)?
+}
+
+/// The Last.fm user name once signed in, or None while still waiting.
+#[tauri::command]
+async fn lastfm_finish(app: AppHandle, token: String) -> CmdResult<Option<String>> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db::open(&app.state::<AppState>().db_path).map_err(err)?;
+        scrobble::lastfm_finish(&conn, &token)
+    })
+    .await
+    .map_err(err)?
+}
+
+#[tauri::command]
+async fn listenbrainz_connect(app: AppHandle, token: String) -> CmdResult<String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db::open(&app.state::<AppState>().db_path).map_err(err)?;
+        scrobble::listenbrainz_connect(&conn, token.trim())
+    })
+    .await
+    .map_err(err)?
+}
+
+#[tauri::command]
+fn scrobble_disconnect(state: State<AppState>, service: String) -> CmdResult<()> {
+    let service = match service.as_str() {
+        "lastfm" => scrobble::Service::LastFm,
+        "listenbrainz" => scrobble::Service::ListenBrainz,
+        other => return Err(format!("unknown service {other}")),
+    };
+    scrobble::disconnect(&state.conn(), service).map_err(err)
+}
+
+// ---------- sync to a device ----------
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SyncTarget {
+    exists: bool,
+    rockbox: bool,
+    free_bytes: Option<u64>,
+    /// Tracks a previous sync put there.
+    synced_files: usize,
+}
+
+#[tauri::command]
+fn sync_target(dest: String) -> SyncTarget {
+    let dest = Path::new(&dest);
+    let synced_files = std::fs::read(dest.join(sync::MANIFEST))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+        .and_then(|v| v.get("files").and_then(|f| f.as_object()).map(|f| f.len()))
+        .unwrap_or(0);
+    SyncTarget {
+        exists: dest.is_dir(),
+        rockbox: sync::rockbox_root(dest).is_some(),
+        free_bytes: fs2::available_space(dest).ok(),
+        synced_files,
+    }
+}
+
+#[tauri::command]
+async fn sync_run(app: AppHandle, profile: sync::Profile) -> CmdResult<sync::Report> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        state.sync_cancel.store(false, std::sync::atomic::Ordering::SeqCst);
+        let conn = db::open(&state.db_path).map_err(err)?;
+        let resolve = |id| resolve_playlist(&conn, id).map_err(anyhow::Error::msg);
+        let progress = |p: sync::Progress| {
+            let _ = tauri::Emitter::emit(&app, "sync-progress", p);
+        };
+        sync::run(&conn, &profile, &resolve, &progress, &state.sync_cancel).map_err(|e| format!("{e:#}"))
+    })
+    .await
+    .map_err(err)?
+}
+
+#[tauri::command]
+fn sync_cancel(state: State<AppState>) {
+    state.sync_cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
 // ---------- updates ----------
 
 #[tauri::command]
 async fn update_status(refresh: bool) -> version::Status {
     version::status(refresh)
+}
+
+// ---------- self-test ----------
+
+/// The UI has loaded and shows `tracks` tracks (see `smoke`).
+#[tauri::command]
+fn ui_ready(tracks: usize) {
+    smoke::ui_ready(tracks);
 }
 
 // ---------- benchmark mode ----------
@@ -469,6 +579,12 @@ fn data_dir(app: &AppHandle) -> anyhow::Result<PathBuf> {
         std::fs::create_dir_all(&dir)?;
         return Ok(dir);
     }
+    if smoke::folder().is_some() {
+        // A self-test never touches the real library.
+        let dir = std::env::temp_dir().join(format!("honeycomb-smoke-{}", std::process::id()));
+        std::fs::create_dir_all(&dir)?;
+        return Ok(dir);
+    }
     let dir = app.path().app_data_dir()?;
     std::fs::create_dir_all(&dir)?;
     let legacy = dir.parent().map(|p| p.join(LEGACY_IDENTIFIER));
@@ -506,12 +622,17 @@ pub fn run() {
                 .unwrap_or(0.8);
             let player = player::spawn(app.handle().clone(), db_path.clone(), volume);
             media::init(app.handle(), player.clone());
+            scrobble::init(app.handle().clone(), db_path.clone());
             app.manage(AppState {
                 db: Mutex::new(conn),
                 db_path,
                 player,
                 scanning: Arc::new(AtomicBool::new(false)),
+                sync_cancel: Arc::new(AtomicBool::new(false)),
             });
+            if let Some(folder) = smoke::folder() {
+                smoke::spawn(app.handle().clone(), folder);
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -539,9 +660,18 @@ pub fn run() {
             import_apply,
             save_text,
             update_status,
+            sync_target,
+            sync_run,
+            sync_cancel,
+            scrobble_status,
+            lastfm_begin,
+            lastfm_finish,
+            listenbrainz_connect,
+            scrobble_disconnect,
             get_lyrics,
             artwork_ext,
             save_artwork,
+            ui_ready,
             perf_enabled,
             perf_log,
             player_load,

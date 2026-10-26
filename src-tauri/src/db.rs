@@ -90,6 +90,31 @@ pub fn migrate(conn: &Connection) -> Result<()> {
              COMMIT;",
         )?;
     }
+    if version < 3 {
+        // v3: scrobbles waiting to be sent. Each service's column is 0 while
+        // the scrobble still has to go there, 1 once it went (or never will).
+        // The song's details are copied, so a scrobble survives its file.
+        conn.execute_batch(
+            "BEGIN;
+             CREATE TABLE scrobbles (
+                id INTEGER PRIMARY KEY,
+                track_id INTEGER,
+                artist TEXT NOT NULL,
+                title TEXT NOT NULL,
+                album TEXT NOT NULL DEFAULT '',
+                album_artist TEXT NOT NULL DEFAULT '',
+                duration REAL NOT NULL DEFAULT 0,
+                track_no INTEGER,
+                played_at INTEGER NOT NULL,
+                lastfm INTEGER NOT NULL DEFAULT 0,
+                listenbrainz INTEGER NOT NULL DEFAULT 0
+             );
+             CREATE INDEX idx_scrobbles_lastfm ON scrobbles(lastfm, played_at);
+             CREATE INDEX idx_scrobbles_listenbrainz ON scrobbles(listenbrainz, played_at);
+             PRAGMA user_version = 3;
+             COMMIT;",
+        )?;
+    }
     Ok(())
 }
 
@@ -289,7 +314,7 @@ mod tests {
         let t = &all_tracks(&conn).unwrap()[0];
         assert!(!t.loved && !t.inbox);
         let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-        assert_eq!(v, 2);
+        assert_eq!(v, 3);
     }
 }
 

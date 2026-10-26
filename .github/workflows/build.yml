@@ -1,6 +1,7 @@
 name: Build
 
-# Alpha builds: push a tag like v0.1.0-alpha.1 (builds every platform), or run
+# Alpha builds: push a tag made by scripts/release.sh, like v0.1.1 (builds every
+# platform, with that version's CHANGELOG.md section as the notes), or run
 # manually from the Actions tab and pick the platforms. Builds a universal macOS
 # .dmg, a Windows installer, and Linux AppImage/.deb/.rpm packages, and attaches
 # them to a draft pre-release.
@@ -72,15 +73,34 @@ jobs:
 
       - run: npm ci
 
+      # The release body is this version's CHANGELOG.md section (Unreleased
+      # on manual runs), followed by the install notes.
+      - name: Release notes
+        id: notes
+        shell: bash
+        run: |
+          {
+            echo "body<<HONEYCOMB_NOTES_END"
+            scripts/release-notes.sh "${{ github.ref_type == 'tag' && github.ref_name || 'Unreleased' }}"
+            echo
+            echo "HONEYCOMB_NOTES_END"
+          } >> "$GITHUB_OUTPUT"
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Baked into the app for Last.fm scrobbling; builds without them
+          # just can't sign in to Last.fm.
+          HONEYCOMB_LASTFM_KEY: ${{ secrets.HONEYCOMB_LASTFM_KEY }}
+          HONEYCOMB_LASTFM_SECRET: ${{ secrets.HONEYCOMB_LASTFM_SECRET }}
         with:
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || format('build-{0}', github.run_number) }}
           releaseName: Honeycomb ${{ github.ref_type == 'tag' && github.ref_name || format('build {0}', github.run_number) }}
           releaseBody: |
+            ${{ steps.notes.outputs.body }}
+
             Alpha build. Not code-signed yet:
-            - macOS: right-click Honeycomb.app → Open the first time (or run `xattr -cr /Applications/Honeycomb.app`).
+            - macOS: open Honeycomb once and close the warning, then System Settings → Privacy & Security → "Open Anyway" (or run `xattr -cr /Applications/Honeycomb.app`).
             - Windows: SmartScreen may warn; choose "More info" → "Run anyway".
             - Linux: the AppImage runs on most distros (`chmod +x` it first); .deb for Debian/Ubuntu, .rpm for Fedora/openSUSE.
           releaseDraft: true

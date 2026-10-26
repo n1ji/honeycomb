@@ -100,6 +100,18 @@ struct QueueEvent {
     error: Option<String>,
 }
 
+/// The song being listened to, followed for scrobbling.
+struct Listen {
+    uid: u64,
+    track_id: i64,
+    started_at: i64,
+    /// Seconds actually heard; seeking ahead doesn't count.
+    heard: f64,
+    last_pos: f64,
+    announced: bool,
+    scrobbled: bool,
+}
+
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Played {
@@ -158,6 +170,7 @@ struct Engine<R: Runtime> {
     /// Queue index last shown, kept after playback stops so the OS still sees a paused track.
     media_last_index: Option<usize>,
     last_tick: Option<Tick>,
+    listen: Option<Listen>,
 }
 
 impl<R: Runtime> Engine<R> {
@@ -191,6 +204,7 @@ impl<R: Runtime> Engine<R> {
             media_dirty: false,
             media_last_index: None,
             last_tick: None,
+            listen: None,
         }
     }
 
@@ -748,7 +762,50 @@ impl<R: Runtime> Engine<R> {
         self.check_idle();
         self.fix_preload();
         self.sync_media();
+        self.follow_listen();
         self.emit_tick(force);
+    }
+
+    /// Tell the scrobbler when a song starts, and once it has been heard
+    /// long enough to count.
+    fn follow_listen(&mut self) {
+        let Some(q) = self.current.and_then(|c| self.queue.get(c)).cloned() else {
+            self.listen = None;
+            return;
+        };
+        let pos = self.position();
+        let fresh = match &self.listen {
+            // Repeat One plays the same item again: the position jumps back
+            // after the song was counted.
+            Some(l) => l.uid != q.uid || (l.scrobbled && pos + 2.0 < l.last_pos),
+            None => true,
+        };
+        if fresh {
+            self.listen = Some(Listen {
+                uid: q.uid,
+                track_id: q.track_id,
+                started_at: now_secs() - pos as i64,
+                heard: 0.0,
+                last_pos: pos,
+                announced: false,
+                scrobbled: false,
+            });
+        }
+        let playing = self.active && !self.paused && self.suspended.is_none();
+        let Some(l) = self.listen.as_mut() else { return };
+        if playing && !l.announced {
+            l.announced = true;
+            crate::scrobble::now_playing(l.track_id);
+        }
+        let delta = pos - l.last_pos;
+        if playing && delta > 0.0 && delta < 2.0 {
+            l.heard += delta;
+        }
+        l.last_pos = pos;
+        if !l.scrobbled && crate::scrobble::threshold(q.duration).is_some_and(|t| l.heard >= t) {
+            l.scrobbled = true;
+            crate::scrobble::listened(&self.db_path, l.track_id, l.started_at);
+        }
     }
 
     /// Tell the OS media controls about a new track, play/pause, or a seek.

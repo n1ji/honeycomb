@@ -130,6 +130,44 @@ export interface UpdateStatus {
   url: string;
 }
 
+export interface ScrobbleStatus {
+  /** This build has a Last.fm API key. */
+  lastfmAvailable: boolean;
+  /** Null when not signed in. */
+  lastfmUser: string | null;
+  listenbrainzUser: string | null;
+  /** Scrobbles not sent yet. */
+  pending: number;
+  error: string | null;
+}
+
+export interface SyncProfile {
+  /** Folder on the device that the music goes into. */
+  dest: string;
+  wholeLibrary: boolean;
+  playlists: number[];
+  /** Remove synced files that are no longer chosen. */
+  removeUnselected: boolean;
+}
+
+export interface SyncTarget {
+  exists: boolean;
+  rockbox: boolean;
+  freeBytes: number | null;
+  syncedFiles: number;
+}
+
+export interface SyncReport {
+  copied: number;
+  unchanged: number;
+  removed: number;
+  playlists: number;
+  bytesCopied: number;
+  playsImported: number;
+  failed: string[];
+  cancelled: boolean;
+}
+
 export interface Lyrics {
   source: "embedded" | "file" | "lrclib" | "none";
   synced: boolean;
@@ -180,6 +218,17 @@ export const api = {
   artworkExt: (trackId: number) => invoke<string | null>("artwork_ext", { trackId }),
   saveArtwork: (trackId: number, dest: string) => invoke<void>("save_artwork", { trackId, dest }),
   lyrics: (trackId: number) => invoke<Lyrics>("get_lyrics", { trackId }),
+  scrobbleStatus: () => invoke<ScrobbleStatus>("scrobble_status"),
+  /** Returns [token, url]: open the URL, then poll lastfmFinish with the token. */
+  lastfmBegin: () => invoke<[string, string]>("lastfm_begin"),
+  /** The user name once approved in the browser, null while still waiting. */
+  lastfmFinish: (token: string) => invoke<string | null>("lastfm_finish", { token }),
+  listenbrainzConnect: (token: string) => invoke<string>("listenbrainz_connect", { token }),
+  scrobbleDisconnect: (service: "lastfm" | "listenbrainz") => invoke<void>("scrobble_disconnect", { service }),
+  syncTarget: (dest: string) => invoke<SyncTarget>("sync_target", { dest }),
+  syncRun: (profile: SyncProfile) => invoke<SyncReport>("sync_run", { profile }),
+  syncCancel: () => invoke<void>("sync_cancel"),
+  uiReady: (tracks: number) => invoke<void>("ui_ready", { tracks }),
   updateStatus: (refresh = false) => invoke<UpdateStatus>("update_status", { refresh }),
 
   load: (trackIds: number[], index: number) => invoke<void>("player_load", { trackIds, index }),

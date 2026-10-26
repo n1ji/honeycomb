@@ -1293,6 +1293,49 @@ textarea.input {
   gap: 4px;
 }
 
+/* ---------- scrobbling and sync ---------- */
+
+.scrobbling {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.scrobbling .row > span:first-child {
+  min-width: 110px;
+}
+
+.sync-lists {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 200px;
+  overflow-y: auto;
+  margin: 4px 0 8px 22px;
+}
+
+.modal progress {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.sync-current {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sync-failed {
+  max-height: 160px;
+  overflow: auto;
+  font-size: 11px;
+  white-space: pre-wrap;
+}
+
+.modal p.error {
+  color: #e03131;
+}
+
 /* ---------- importer ---------- */
 
 .import-paths {
