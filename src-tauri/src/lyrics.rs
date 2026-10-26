@@ -159,6 +159,16 @@ fn agent() -> ureq::Agent {
         .build()
 }
 
+/// Largest LRCLIB answer read; anything bigger is refused.
+const MAX_ANSWER: u64 = 2 * 1024 * 1024;
+
+fn read_json<T: serde::de::DeserializeOwned>(r: ureq::Response) -> Result<T> {
+    let mut body = Vec::new();
+    std::io::Read::read_to_end(&mut std::io::Read::take(r.into_reader(), MAX_ANSWER + 1), &mut body)?;
+    anyhow::ensure!(body.len() as u64 <= MAX_ANSWER, "LRCLIB's answer was over {} MB", MAX_ANSWER >> 20);
+    Ok(serde_json::from_slice(&body)?)
+}
+
 /// Look a track up on LRCLIB: an exact match first, then a search filtered by length.
 fn fetch_lrclib(track: &Track) -> Result<Option<LrclibRecord>> {
     if track.title.is_empty() || track.artist.is_empty() {
@@ -173,16 +183,17 @@ fn fetch_lrclib(track: &Track) -> Result<Option<LrclibRecord>> {
         .query("duration", &format!("{}", track.duration.round() as i64))
         .call();
     match exact {
-        Ok(r) => return Ok(Some(r.into_json()?)),
+        Ok(r) => return Ok(Some(read_json(r)?)),
         Err(ureq::Error::Status(404, _)) => {}
         Err(e) => return Err(e.into()),
     }
-    let found: Vec<LrclibRecord> = agent
-        .get(&format!("{LRCLIB}/search"))
-        .query("track_name", &track.title)
-        .query("artist_name", &track.artist)
-        .call()?
-        .into_json()?;
+    let found: Vec<LrclibRecord> = read_json(
+        agent
+            .get(&format!("{LRCLIB}/search"))
+            .query("track_name", &track.title)
+            .query("artist_name", &track.artist)
+            .call()?,
+    )?;
     Ok(found
         .into_iter()
         .filter(|r| r.duration.is_none_or(|d| (d - track.duration).abs() <= 5.0))

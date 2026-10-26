@@ -2,7 +2,7 @@
 name = "honeycomb"
 version = "0.1.0"
 description = "Honeycomb - a fast, library-focused music player"
-authors = ["Honeycomb contributors"]
+authors = ["n1ji"]
 license = "GPL-3.0-or-later"
 edition = "2024"
 

@@ -1,0 +1,25 @@
+name: Audit
+
+# Checks the Rust dependencies against the RustSec advisory database. Fails on
+# known vulnerabilities; "unmaintained" and similar warnings are only shown.
+on:
+  push:
+    branches: [main]
+    paths: ["src-tauri/Cargo.lock", "src-tauri/Cargo.toml", ".github/workflows/audit.yml"]
+  schedule:
+    - cron: "17 6 * * 1" # Mondays: new advisories for unchanged dependencies
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: cargo audit
+        working-directory: src-tauri
+        run: cargo audit

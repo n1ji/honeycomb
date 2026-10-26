@@ -222,10 +222,72 @@ pub fn write_tags(path: &Path, edit: &TagEdit) -> Result<()> {
         tag.push_picture(Picture::new_unchecked(PictureType::CoverFront, Some(mime), None, data));
     }
 
-    tagged
-        .save_to_path(path, WriteOptions::default())
-        .with_context(|| format!("saving {}", path.display()))?;
-    Ok(())
+    save_safely(&tagged, path)
+}
+
+/// Write the tags into a copy next to the file, then swap the copy in. A
+/// crash, a full disk or an unplugged drive mid-write leaves the original
+/// untouched (rename replaces the file in one step on the same disk).
+fn save_safely(tagged: &lofty::file::TaggedFile, path: &Path) -> Result<()> {
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    // Not an audio extension, so a scan running meanwhile skips it.
+    let tmp = path.with_file_name(format!(".{name}.honeycomb-tmp"));
+    let write = || -> Result<()> {
+        fs::copy(path, &tmp).with_context(|| format!("copying {}", path.display()))?;
+        tagged
+            .save_to_path(&tmp, WriteOptions::default())
+            .with_context(|| format!("saving {}", path.display()))?;
+        fs::File::open(&tmp)?.sync_all()?;
+        fs::rename(&tmp, path).with_context(|| format!("replacing {}", path.display()))?;
+        Ok(())
+    };
+    let result = write();
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Needs ffmpeg. Every format keeps its audio and gets the new tags, and
+    /// no temporary file is left behind.
+    #[test]
+    fn tag_edits_replace_the_file_whole() {
+        let dir = std::env::temp_dir().join(format!("hc-tags-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        for ext in ["mp3", "flac", "m4a", "ogg", "wav"] {
+            let path = dir.join(format!("t.{ext}"));
+            let ok = std::process::Command::new("ffmpeg")
+                .args(["-loglevel", "error", "-f", "lavfi", "-i", "sine=duration=1", "-metadata", "title=Old"])
+                .args(if ext == "ogg" { &["-c:a", "vorbis", "-strict", "-2", "-ac", "2"][..] } else { &[][..] })
+                .arg(&path)
+                .status()
+                .is_ok_and(|s| s.success());
+            if !ok {
+                eprintln!("skipping: ffmpeg couldn't make a .{ext}");
+                continue;
+            }
+            let edit = TagEdit { title: Some("New".into()), ..Default::default() };
+            write_tags(&path, &edit).unwrap();
+            let t = read_track(&path).unwrap();
+            assert_eq!(t.title, "New", "{ext}");
+            assert!(t.duration > 0.9, "{ext}: audio survived");
+            let leftovers: Vec<_> = fs::read_dir(&dir).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().contains("honeycomb-tmp")).collect();
+            assert!(leftovers.is_empty(), "{ext}: {leftovers:?}");
+        }
+
+        // A failed write leaves the original as it was.
+        let path = dir.join("t.mp3");
+        let before = fs::read(&path).unwrap();
+        let bad = TagEdit { art_path: Some(dir.join("missing.png").to_string_lossy().into()), ..Default::default() };
+        assert!(write_tags(&path, &bad).is_err());
+        assert_eq!(fs::read(&path).unwrap(), before);
+        let _ = fs::remove_dir_all(&dir);
+    }
 }
 
 /// Lyrics stored in the file's tags (USLT, LYRICS, ©lyr…), if any.

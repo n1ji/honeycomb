@@ -83,7 +83,8 @@ fn blank(source: &'static str) -> Status {
 }
 
 fn check() -> Status {
-    if REPO.is_empty() || !std::path::Path::new(REPO).join(".git").exists() {
+    // Only debug builds follow a checkout (release builds don't know one).
+    if !cfg!(debug_assertions) || REPO.is_empty() || !std::path::Path::new(REPO).join(".git").exists() {
         return check_release();
     }
     let mut s = blank("checkout");
@@ -181,7 +182,10 @@ fn check_release_for(github: &str, commit: &str) -> Status {
         return s;
     };
     s.remote = latest.tag_name.clone();
-    s.url = latest.html_url.clone();
+    // Only ever offer a download page on GitHub itself.
+    if latest.html_url.starts_with("https://github.com/") {
+        s.url = latest.html_url.clone();
+    }
     let cmp: Compare = match agent.get(&format!("{api}/compare/{commit}...{}", latest.tag_name)).call() {
         Ok(r) => match r.into_json() {
             Ok(c) => c,

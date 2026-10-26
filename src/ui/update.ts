@@ -84,9 +84,10 @@ function openDetails(s: UpdateStatus | null, check: (refresh?: boolean) => Promi
     }),
   );
   const download = button("Download", () => run(() => openUrl(s!.url)), true);
+  const isGithub = (url: string) => url.startsWith("https://github.com/");
   const close = button("Close", m.close);
   const footer = () => {
-    const canDownload = s?.source === "release" && s.state === "behind" && !!s.url;
+    const canDownload = s?.source === "release" && s.state === "behind" && isGithub(s.url);
     close.className = canDownload ? "btn" : "btn primary";
     m.footer.replaceChildren(recheck, ...(canDownload ? [download] : []), close);
   };
