@@ -1,3 +1,4 @@
+import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, UpdateStatus } from "../api";
 import { h } from "../util";
@@ -55,7 +56,9 @@ function openDetails(s: UpdateStatus | null, check: (refresh?: boolean) => Promi
       ),
     ];
     if (s.source === "release") {
-      if (s.state === "behind" && s.url) {
+      if (s.state === "behind" && s.updateUrl) {
+        rows.push(h("p", {}, "Install it and Honeycomb restarts on the new version. Your library and settings stay as they are."));
+      } else if (s.state === "behind" && s.url) {
         rows.push(h("p", {}, "Download the new version from its release page and install it over this one. Your library and settings stay as they are."));
       }
     } else if (s.state === "behind" || s.state === "diverged") {
@@ -84,12 +87,40 @@ function openDetails(s: UpdateStatus | null, check: (refresh?: boolean) => Promi
     }),
   );
   const download = button("Download", () => run(() => openUrl(s!.url)), true);
+  const install = button("Install and restart", () => run(installUpdate), true);
+  const installUpdate = async () => {
+    const bar = h("progress", { class: "update-progress", max: 1, value: 0 });
+    const label = h("p", { class: "muted" }, "Downloading…");
+    m.body.replaceChildren(h("p", {}, `Installing ${s!.remote}…`), bar, label);
+    m.footer.replaceChildren();
+    const stop = await listen<{ done: number; total: number | null }>("update-progress", (e) => {
+      const { done, total } = e.payload;
+      const mb = (n: number) => (n / 1048576).toFixed(1);
+      if (total) {
+        bar.value = done / total;
+        label.textContent = `Downloading… ${mb(done)} of ${mb(total)} MB`;
+      } else {
+        bar.removeAttribute("value");
+        label.textContent = `Downloading… ${mb(done)} MB`;
+      }
+      if (total && done >= total) label.textContent = "Installing…";
+    });
+    try {
+      await api.updateInstall();
+    } finally {
+      stop();
+      // Still here: it failed before the restart (the error shows as a toast).
+      render();
+    }
+  };
   const isGithub = (url: string) => url.startsWith("https://github.com/");
   const close = button("Close", m.close);
   const footer = () => {
-    const canDownload = s?.source === "release" && s.state === "behind" && isGithub(s.url);
-    close.className = canDownload ? "btn" : "btn primary";
-    m.footer.replaceChildren(recheck, ...(canDownload ? [download] : []), close);
+    const behind = s?.source === "release" && s.state === "behind";
+    const canInstall = behind && !!s?.updateUrl;
+    const canDownload = behind && !canInstall && isGithub(s!.url);
+    close.className = canInstall || canDownload ? "btn" : "btn primary";
+    m.footer.replaceChildren(recheck, ...(canInstall ? [install] : canDownload ? [download] : []), close);
   };
   const render = () => {
     body();

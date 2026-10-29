@@ -407,6 +407,11 @@ body {
   line-height: 15px;
 }
 
+.update-progress {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
 .update-cmd {
   display: block;
   padding: 8px 10px;

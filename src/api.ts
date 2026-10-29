@@ -138,6 +138,8 @@ export interface UpdateStatus {
   source: "checkout" | "release";
   /** The newest release's page (release checks only). */
   url: string;
+  /** The newest release's signed update manifest, when it can be installed from inside the app. */
+  updateUrl: string;
 }
 
 export interface SyncProfile {
@@ -222,6 +224,8 @@ export const api = {
   syncCancel: () => invoke<void>("sync_cancel"),
   uiReady: (tracks: number) => invoke<void>("ui_ready", { tracks }),
   updateStatus: (refresh = false) => invoke<UpdateStatus>("update_status", { refresh }),
+  /** Downloads, installs and restarts; resolves only if something went wrong before the restart. */
+  updateInstall: () => invoke<void>("update_install"),
 
   load: (trackIds: number[], index: number) => invoke<void>("player_load", { trackIds, index }),
   enqueue: (trackIds: number[], next: boolean) => invoke<void>("player_enqueue", { trackIds, next }),

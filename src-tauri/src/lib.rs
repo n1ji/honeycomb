@@ -22,7 +22,7 @@ use std::sync::{Arc, Mutex};
 
 use rusqlite::Connection;
 use tauri::http::{Response, StatusCode, header};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use models::{Playlist, SmartRules, TagEdit, Track, TrackTable, now_secs};
 use player::{Cmd, PlayerHandle, QItem, Repeat};
@@ -493,6 +493,17 @@ async fn update_status(refresh: bool) -> version::Status {
     version::status(refresh)
 }
 
+/// Install the newest release over this one, then restart. Sends
+/// `update-progress` {done, total} while downloading.
+#[tauri::command]
+async fn update_install(app: AppHandle) -> Result<(), String> {
+    let events = app.clone();
+    version::install(&app, move |done, total| {
+        let _ = events.emit("update-progress", serde_json::json!({ "done": done, "total": total }));
+    })
+    .await
+}
+
 // ---------- self-test ----------
 
 /// The UI has loaded and shows `tracks` tracks (see `smoke`).
@@ -622,6 +633,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .register_asynchronous_uri_scheme_protocol("art", |ctx, request, responder| {
             let app = ctx.app_handle().clone();
             let path = request.uri().path().to_string();
@@ -698,6 +710,7 @@ pub fn run() {
             import_apply,
             save_text,
             update_status,
+            update_install,
             plugin_list,
             plugin_folder,
             plugin_http,

@@ -6,6 +6,7 @@ and uses it as the GitHub release notes.
 
 ## Unreleased
 
+- Updates install themselves now! When the bulb lights up, click it and hit Install, and Honeycomb downloads the new version, checks that it really came from me (every update is signed) and restarts on it. No more going to GitHub and installing over the top by hand. This only works from this version on, so 0.1.1 still has to be updated the old way one last time.
 - You can finally see what quality you're listening at. There's a little badge next to the song title in the player bar (like `FLAC 24/96` or `MP3 320`, gold for lossless), and clicking it shows the whole signal path: the file, whether it gets resampled or downmixed, the volume, and what the output device runs at. If something changes the audio on the way out, the badge gets a small orange dot.
 - Honeycomb now knows the bit depth of lossless files. There's a Bit Depth column and a smart playlist rule for it, so "everything 24-bit" is one rule away. Lossless files get read again once on the first scan after updating to fill it in.
 

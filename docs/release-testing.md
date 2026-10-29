@@ -50,3 +50,6 @@ git push origin main v0.1.1
 CI builds every platform into a draft pre-release with the CHANGELOG section
 as its notes. Download one artifact per platform from the draft, run the
 self-test on it once more, then publish the draft.
+
+- [ ] The draft has `latest.json` and a `.sig` next to each update file (`Honeycomb_universal.app.tar.gz`, the Windows setup .exe). Without them the "Update signing" step found no key, and the app can only offer a download link.
+- [ ] After publishing: in the previous version, the bulb lights up and **Install and restart** brings it to this version, with the library intact.

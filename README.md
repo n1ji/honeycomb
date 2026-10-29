@@ -56,7 +56,7 @@ The builds aren't code-signed yet, so your system will warn you the first time:
 - Track list columns can be dragged to reorder and shown or hidden, including Album Artist, Composer, Disc, Format, Bitrate, Sample Rate, Added, Last Played and Comment.
 
 **Updates**
-- A bulb in the sidebar lights up when a newer release is out.
+- A bulb in the sidebar lights up when a newer release is out. Click it, then Install, and Honeycomb downloads the new version, checks its signature and restarts on it.
 
 Your library database lives in the app data folder. Honeycomb never moves or deletes your music files, and it only writes to them when you save in the tag editor.
 

@@ -105,9 +105,28 @@ jobs:
             echo "HONEYCOMB_NOTES_END"
           } >> "$GITHUB_OUTPUT"
 
+      # In-app updates: with the signing key in the repo secrets, the build
+      # also makes signed update files, and tauri-action attaches latest.json
+      # (which the app reads to find and verify them). The public half of the
+      # key is plugins.updater.pubkey in tauri.conf.json.
+      - name: Update signing
+        id: updater
+        shell: bash
+        env:
+          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -n "$KEY" ]; then
+            echo "args=--config src-tauri/tauri.updater.conf.json" >> "$GITHUB_OUTPUT"
+            echo "Update files will be signed."
+          else
+            echo "No signing key in the repo secrets; this build can't be installed from inside the app."
+          fi
+
       - uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || format('build-{0}', github.run_number) }}
           releaseName: Honeycomb ${{ github.ref_type == 'tag' && github.ref_name || format('build {0}', github.run_number) }}
@@ -119,7 +138,8 @@ jobs:
             - Windows: SmartScreen may warn; choose "More info" → "Run anyway".
           releaseDraft: true
           prerelease: true
-          args: ${{ matrix.args }}
+          includeUpdaterJson: true
+          args: ${{ matrix.args }} ${{ steps.updater.outputs.args }}
 
   # SHA256SUMS.txt for everything attached to the (draft) release.
   checksums:

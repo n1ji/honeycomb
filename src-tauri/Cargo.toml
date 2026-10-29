@@ -46,6 +46,7 @@ souvlaki = { version = "0.8", default-features = false, features = ["use_zbus"] 
 # Login tokens in the system credential store (Keychain, Credential Manager,
 # Secret Service over zbus, so Linux still needs no libdbus).
 keyring = "4.2"
+tauri-plugin-updater = "2"
 
 [dev-dependencies]
 # Mock runtime for driving the player in tests.

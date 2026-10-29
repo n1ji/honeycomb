@@ -31,6 +31,9 @@ pub struct Status {
     pub source: &'static str,
     /// The newest release's page, for downloading it.
     pub url: String,
+    /// The newest release's signed update manifest (`latest.json`), when it
+    /// has one: the update can then be installed from inside the app.
+    pub update_url: String,
 }
 
 static LAST: Mutex<Option<(Instant, Status)>> = Mutex::new(None);
@@ -79,6 +82,7 @@ fn blank(source: &'static str) -> Status {
         message: String::new(),
         source,
         url: String::new(),
+        update_url: String::new(),
     }
 }
 
@@ -123,6 +127,14 @@ struct Release {
     name: Option<String>,
     html_url: String,
     draft: bool,
+    #[serde(default)]
+    assets: Vec<Asset>,
+}
+
+#[derive(serde::Deserialize)]
+struct Asset {
+    name: String,
+    browser_download_url: String,
 }
 
 #[derive(serde::Deserialize)]
@@ -143,6 +155,17 @@ fn agent() -> ureq::Agent {
 /// A downloaded build: compare its commit with the newest published release
 /// (pre-releases count; alphas are published as pre-releases).
 fn check_release() -> Status {
+    // HONEYCOMB_UPDATE_URL=<latest.json URL> skips GitHub, to test installing
+    // an update from a local server.
+    if let Ok(url) = std::env::var("HONEYCOMB_UPDATE_URL") {
+        let mut s = blank("release");
+        s.state = "behind";
+        s.behind = 1;
+        s.remote = "test".into();
+        s.message = "Test update available.".into();
+        s.update_url = url;
+        return s;
+    }
     check_release_for(GITHUB, COMMIT)
 }
 
@@ -186,6 +209,10 @@ fn check_release_for(github: &str, commit: &str) -> Status {
     if latest.html_url.starts_with("https://github.com/") {
         s.url = latest.html_url.clone();
     }
+    let downloads = format!("https://github.com/{github}/releases/download/");
+    if let Some(a) = latest.assets.iter().find(|a| a.name == "latest.json" && a.browser_download_url.starts_with(&downloads)) {
+        s.update_url = a.browser_download_url.clone();
+    }
     let cmp: Compare = match agent.get(&format!("{api}/compare/{commit}...{}", latest.tag_name)).call() {
         Ok(r) => match crate::net::read_json(r, crate::net::GITHUB_MAX) {
             Ok(c) => c,
@@ -214,6 +241,43 @@ fn check_release_for(github: &str, commit: &str) -> Status {
     s
 }
 
+/// Download the newest release's update, check its signature against the key
+/// built into the app (`plugins.updater.pubkey`), install it and restart.
+/// `progress` gets (bytes so far, total if known).
+pub async fn install<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    progress: impl Fn(u64, Option<u64>) + Send + 'static,
+) -> Result<(), String> {
+    use tauri_plugin_updater::UpdaterExt;
+    let url = status(false).update_url;
+    if url.is_empty() {
+        return Err("This release can't be installed from inside Honeycomb. Download it from its release page instead.".into());
+    }
+    let url = url.parse().map_err(|_| "The update's address isn't valid.".to_string())?;
+    let updater = app
+        .updater_builder()
+        .endpoints(vec![url])
+        .and_then(|b| b.build())
+        .map_err(|e| format!("Can't check for the update: {e}"))?;
+    let update = updater
+        .check()
+        .await
+        .map_err(|e| format!("Can't check for the update: {e}"))?
+        .ok_or("You already have the newest version.")?;
+    let mut got = 0u64;
+    update
+        .download_and_install(
+            move |chunk, total| {
+                got += chunk as u64;
+                progress(got, total);
+            },
+            || {},
+        )
+        .await
+        .map_err(|e| format!("Couldn't install the update: {e}"))?;
+    app.restart()
+}
+
 /// Cached for 10 minutes unless `refresh` is set.
 pub fn status(refresh: bool) -> Status {
     // HONEYCOMB_UPDATE_PREVIEW=3 pretends to be 3 builds behind, to see the lit bulb.
@@ -228,6 +292,7 @@ pub fn status(refresh: bool) -> Status {
             message: format!("Preview: pretending {n} newer builds are on GitHub."),
             source: "checkout",
             url: String::new(),
+            update_url: String::new(),
         };
     }
     if !refresh {

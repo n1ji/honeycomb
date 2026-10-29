@@ -90,6 +90,8 @@ This is a plan, not a promise. Each month has a "done when" line. Whatever slips
 
 Online tag and artwork lookup, automatic file renaming and organizing, theme files and custom CSS, saved layout profiles, podcasts, internet radio, CD ripping, plugins, mobile apps.
 
+Remote server libraries: browse and play music from Navidrome and other servers that speak the Subsonic API (Gonic, Airsonic-Advanced, Ampache and the like), next to local folders. Stream through Kaseki, with ratings, play counts and scrobbles going back to the server, and maybe downloads for offline use.
+
 ## Ground rules
 
 - **Original work:** Honeycomb may share familiar ideas with other players, but never their code, assets, skins or branding.
