@@ -1,6 +1,6 @@
 [package]
 name = "honeycomb"
-version = "0.1.0"
+version = "0.1.1"
 description = "Honeycomb - a fast, library-focused music player"
 authors = ["n1ji"]
 license = "GPL-3.0-or-later"

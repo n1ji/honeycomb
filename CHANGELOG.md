@@ -6,6 +6,8 @@ and uses it as the GitHub release notes.
 
 ## Unreleased
 
+## 0.1.1, 2026-10-29
+
 So this one is a big one. The two things I promised right after the alpha are here, scrobbling and syncing to players, plus a plugin system that scrobbling now runs on, and a whole lot of security work that happened before the repo went public.
 
 ### Scrobbling (Last.fm and ListenBrainz)
