@@ -139,8 +139,4 @@ Copyright (C) 2026 n1ji
 Honeycomb is free software under the GNU General Public License, version 3 or
 any later version. See [LICENSE](LICENSE).
 
-The website's images and videos in `site/assets` are not covered by the GPL.
-Each keeps its own license (most are public domain), listed with its creator
-and source in [site/assets/credits.json](site/assets/credits.json).
-
 Honeycomb is an independent project. It is not affiliated with or derived from any other music player.
