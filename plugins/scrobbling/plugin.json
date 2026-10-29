@@ -1,0 +1,9 @@
+{
+  "id": "scrobbling",
+  "name": "Scrobbling",
+  "version": "1.0.0",
+  "description": "Sends the songs you listen to to Last.fm and ListenBrainz.",
+  "main": "main.js",
+  "apiVersion": 1,
+  "hosts": ["ws.audioscrobbler.com", "api.listenbrainz.org"]
+}

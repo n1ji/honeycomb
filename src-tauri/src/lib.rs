@@ -7,8 +7,9 @@ mod meta;
 mod models;
 mod net;
 mod player;
+mod plugins;
 mod scanner;
-mod scrobble;
+mod secrets;
 mod smart;
 mod smoke;
 mod sync;
@@ -33,6 +34,7 @@ pub struct AppState {
     scanning: Arc<AtomicBool>,
     /// Set to stop a running sync.
     sync_cancel: Arc<AtomicBool>,
+    plugins: plugins::Dirs,
 }
 
 type CmdResult<T> = Result<T, String>;
@@ -377,50 +379,6 @@ async fn get_lyrics(app: AppHandle, track_id: i64) -> CmdResult<lyrics::Lyrics> 
     .map_err(err)?
 }
 
-// ---------- scrobbling ----------
-
-#[tauri::command]
-fn scrobble_status(state: State<AppState>) -> scrobble::Status {
-    scrobble::status(&state.conn())
-}
-
-/// Returns (token, url): open the URL, then call `lastfm_finish` with the token.
-#[tauri::command]
-async fn lastfm_begin() -> CmdResult<(String, String)> {
-    tauri::async_runtime::spawn_blocking(scrobble::lastfm_begin).await.map_err(err)?
-}
-
-/// The Last.fm user name once signed in, or None while still waiting.
-#[tauri::command]
-async fn lastfm_finish(app: AppHandle, token: String) -> CmdResult<Option<String>> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let conn = db::open(&app.state::<AppState>().db_path).map_err(err)?;
-        scrobble::lastfm_finish(&conn, &token)
-    })
-    .await
-    .map_err(err)?
-}
-
-#[tauri::command]
-async fn listenbrainz_connect(app: AppHandle, token: String) -> CmdResult<String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let conn = db::open(&app.state::<AppState>().db_path).map_err(err)?;
-        scrobble::listenbrainz_connect(&conn, token.trim())
-    })
-    .await
-    .map_err(err)?
-}
-
-#[tauri::command]
-fn scrobble_disconnect(state: State<AppState>, service: String) -> CmdResult<()> {
-    let service = match service.as_str() {
-        "lastfm" => scrobble::Service::LastFm,
-        "listenbrainz" => scrobble::Service::ListenBrainz,
-        other => return Err(format!("unknown service {other}")),
-    };
-    scrobble::disconnect(&state.conn(), service).map_err(err)
-}
-
 // ---------- sync to a device ----------
 
 #[derive(serde::Serialize)]
@@ -468,6 +426,64 @@ async fn sync_run(app: AppHandle, profile: sync::Profile) -> CmdResult<sync::Rep
 #[tauri::command]
 fn sync_cancel(state: State<AppState>) {
     state.sync_cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+// ---------- plugins ----------
+
+#[tauri::command]
+fn plugin_list(state: State<AppState>) -> Vec<plugins::Listed> {
+    state.plugins.list()
+}
+
+#[tauri::command]
+fn plugin_folder(state: State<AppState>) -> String {
+    state.plugins.user.to_string_lossy().into_owned()
+}
+
+fn plugin_manifest(app: &AppHandle, plugin: &str) -> CmdResult<plugins::Manifest> {
+    app.state::<AppState>().plugins.manifest(plugin).map_err(|e| format!("{plugin}: {e:#}"))
+}
+
+#[tauri::command]
+async fn plugin_http(app: AppHandle, plugin: String, request: plugins::HttpRequest) -> CmdResult<plugins::HttpResponse> {
+    let m = plugin_manifest(&app, &plugin)?;
+    tauri::async_runtime::spawn_blocking(move || plugins::http(&m, &request).map_err(|e| format!("{e:#}")))
+        .await
+        .map_err(err)?
+}
+
+/// Waits for the browser to come back to `http://127.0.0.1:<port><path>`; returns the query string.
+#[tauri::command]
+async fn plugin_oauth_redirect(app: AppHandle, plugin: String, port: u16, path: String, timeout_secs: Option<u64>) -> CmdResult<String> {
+    let m = plugin_manifest(&app, &plugin)?;
+    let timeout = std::time::Duration::from_secs(timeout_secs.unwrap_or(300).min(900));
+    tauri::async_runtime::spawn_blocking(move || plugins::wait_for_redirect(&m, port, &path, timeout).map_err(|e| format!("{e:#}")))
+        .await
+        .map_err(err)?
+}
+
+#[tauri::command]
+fn plugin_secret_get(app: AppHandle, plugin: String, key: String) -> CmdResult<Option<String>> {
+    plugin_manifest(&app, &plugin)?;
+    Ok(plugins::secret_get(&app.state::<AppState>().conn(), &plugin, &key))
+}
+
+/// A null value deletes the secret.
+#[tauri::command]
+fn plugin_secret_set(app: AppHandle, plugin: String, key: String, value: Option<String>) -> CmdResult<()> {
+    plugin_manifest(&app, &plugin)?;
+    plugins::secret_set(&app.state::<AppState>().conn(), &plugin, &key, value.as_deref())
+}
+
+/// Library track ids for tracks described by another service (null where none matched).
+#[tauri::command]
+async fn match_tracks(app: AppHandle, candidates: Vec<plugins::Candidate>) -> CmdResult<Vec<Option<i64>>> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let index = plugins::LibraryIndex::new(&db::all_tracks(&app.state::<AppState>().conn()).map_err(err)?);
+        Ok(candidates.iter().map(|c| index.find(c)).collect())
+    })
+    .await
+    .map_err(err)?
 }
 
 // ---------- updates ----------
@@ -611,11 +627,32 @@ pub fn run() {
             let path = request.uri().path().to_string();
             std::thread::spawn(move || responder.respond(serve_art(&app, &path)));
         })
+        .register_asynchronous_uri_scheme_protocol("plugin", |ctx, request, responder| {
+            let app = ctx.app_handle().clone();
+            let path = request.uri().path().to_string();
+            std::thread::spawn(move || {
+                let state = app.state::<AppState>();
+                let enabled = plugins::enabled_ids(&state.conn());
+                responder.respond(plugins::serve(&state.plugins, &enabled, &path))
+            });
+        })
         .setup(|app| {
             let dir = data_dir(app.handle())?;
             let db_path = dir.join("library.db");
+            let plugins_dir = dir.join("plugins");
+            std::fs::create_dir_all(&plugins_dir)?;
+            // Plugins that ship with the app. Dev builds read them straight from
+            // the checkout, so edits show up on the next start.
+            let bundled = if cfg!(debug_assertions) {
+                Some(Path::new(env!("CARGO_MANIFEST_DIR")).join("../plugins"))
+            } else {
+                app.path().resource_dir().ok().map(|d| d.join("plugins"))
+            };
             let conn = db::open(&db_path)?;
             db::migrate(&conn)?;
+            let test_library = std::env::var_os("HONEYCOMB_DATA_DIR").is_some() || smoke::folder().is_some();
+            secrets::init(&app.config().identifier, test_library.then_some(dir.as_path()));
+            secrets::migrate(&conn);
             let volume = db::settings(&conn)?
                 .into_iter()
                 .find(|(k, _)| k == "volume")
@@ -623,13 +660,13 @@ pub fn run() {
                 .unwrap_or(0.8);
             let player = player::spawn(app.handle().clone(), db_path.clone(), volume);
             media::init(app.handle(), player.clone());
-            scrobble::init(app.handle().clone(), db_path.clone());
             app.manage(AppState {
                 db: Mutex::new(conn),
                 db_path,
                 player,
                 scanning: Arc::new(AtomicBool::new(false)),
                 sync_cancel: Arc::new(AtomicBool::new(false)),
+                plugins: plugins::Dirs { user: plugins_dir, bundled },
             });
             if let Some(folder) = smoke::folder() {
                 smoke::spawn(app.handle().clone(), folder);
@@ -661,14 +698,16 @@ pub fn run() {
             import_apply,
             save_text,
             update_status,
+            plugin_list,
+            plugin_folder,
+            plugin_http,
+            plugin_oauth_redirect,
+            plugin_secret_get,
+            plugin_secret_set,
+            match_tracks,
             sync_target,
             sync_run,
             sync_cancel,
-            scrobble_status,
-            lastfm_begin,
-            lastfm_finish,
-            listenbrainz_connect,
-            scrobble_disconnect,
             get_lyrics,
             artwork_ext,
             save_artwork,

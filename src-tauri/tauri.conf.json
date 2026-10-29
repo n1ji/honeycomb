@@ -20,12 +20,15 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: art: http://art.localhost; connect-src ipc: http://ipc.localhost",
-      "devCsp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: art: http://art.localhost; connect-src ipc: http://ipc.localhost ws://localhost:1420"
+      "csp": "default-src 'self'; script-src 'self' plugin: http://plugin.localhost; style-src 'self' 'unsafe-inline'; img-src 'self' data: art: http://art.localhost plugin: http://plugin.localhost; connect-src ipc: http://ipc.localhost plugin: http://plugin.localhost",
+      "devCsp": "default-src 'self'; script-src 'self' plugin: http://plugin.localhost; style-src 'self' 'unsafe-inline'; img-src 'self' data: art: http://art.localhost plugin: http://plugin.localhost; connect-src ipc: http://ipc.localhost plugin: http://plugin.localhost ws://localhost:1420"
     }
   },
   "bundle": {
     "active": true,
+    "resources": {
+      "../plugins/": "plugins/"
+    },
     "targets": "all",
     "category": "Music",
     "shortDescription": "A fast, library-focused music player",

@@ -1,6 +1,7 @@
 import { listen } from "@tauri-apps/api/event";
 import { api, QueueState, Tick } from "./api";
 import { perfEnabled, runBenchmark } from "./perf";
+import { loadPlugins } from "./plugins";
 import { store } from "./store";
 import { $, modKey, toast } from "./util";
 import { run } from "./ui/actions";
@@ -91,6 +92,7 @@ async function main() {
   await store.loadTracks();
   const loaded = performance.now();
   await api.cmd("emit");
+  await loadPlugins();
   void api.uiReady(store.tracks.size);
   if (await perfEnabled()) void runBenchmark(mainStart, loaded);
 

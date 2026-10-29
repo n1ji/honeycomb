@@ -22,3 +22,25 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Secrets and keys
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.keystore
+*.jks
+
+# Libraries and test data (library.db, benchmark and smoke-test libraries)
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# The scrobbling plugin's Last.fm API key: written by CI from its secrets, never committed.
+plugins/scrobbling/lastfm-key.js

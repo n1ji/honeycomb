@@ -34,7 +34,12 @@ Honeycomb only connects to the internet for:
 
 - GitHub's API, to check for a newer release.
 - LRCLIB (lrclib.net), for lyrics, when online lookup is on.
-- Last.fm and ListenBrainz, for scrobbling, once you sign in.
+- Last.fm and ListenBrainz, through the Scrobbling plugin that comes with
+  Honeycomb, once you turn it on and sign in.
+- Plugins you turn on (Settings → Plugins), which can only reach the hosts
+  listed in their `plugin.json`. Honeycomb ships with one, Scrobbling, and it's
+  off until you turn it on. Plugins run with the same access as the app, so
+  only install ones you trust.
 
 It never uploads your music files. It only changes them when you edit tags,
 and then writes the change to a copy that replaces the original once the write

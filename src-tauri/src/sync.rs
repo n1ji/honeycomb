@@ -215,7 +215,7 @@ pub fn rockbox_root(dest: &Path) -> Option<PathBuf> {
 
 /// Read new plays from the player's log and count them in the library.
 /// Lines are `timestamp:elapsed_ms:length_ms:/path/on/player`. A play counts
-/// under the same rule as scrobbles: half the song or 4 minutes, songs over
+/// under the same rule as listens in the app: half the song or 4 minutes, songs over
 /// 30 seconds (and anything heard to the end).
 fn import_rockbox_plays(conn: &Connection, dest: &Path, root: &Path, m: &mut Manifest) -> Result<usize> {
     let log = root.join(".rockbox").join("playback.log");
@@ -257,7 +257,7 @@ fn import_rockbox_plays(conn: &Connection, dest: &Path, root: &Path, m: &mut Man
             continue;
         };
         let (elapsed, length) = (elapsed / 1000.0, length / 1000.0);
-        let counts = crate::scrobble::threshold(length).map_or(elapsed >= length - 1.0, |t| elapsed >= t);
+        let counts = crate::player::listen_threshold(length).map_or(elapsed >= length - 1.0, |t| elapsed >= t);
         if !counts {
             continue;
         }

@@ -8,8 +8,6 @@ use serde::de::DeserializeOwned;
 
 /// GitHub's release list and compare answers.
 pub const GITHUB_MAX: u64 = 1024 * 1024;
-/// Last.fm and ListenBrainz answers are small JSON objects.
-pub const SCROBBLE_MAX: u64 = 256 * 1024;
 /// LRCLIB search results can carry many full lyrics.
 pub const LRCLIB_MAX: u64 = 2 * 1024 * 1024;
 
@@ -54,7 +52,7 @@ mod tests {
     #[test]
     fn oversized_answers_are_refused() {
         let url = serve(3 * 1024 * 1024);
-        let err = read_json::<String>(ureq::get(&url).call().unwrap(), SCROBBLE_MAX).unwrap_err();
+        let err = read_json::<String>(ureq::get(&url).call().unwrap(), 256 * 1024).unwrap_err();
         assert!(err.to_string().contains("over 256 KB"), "{err}");
     }
 }

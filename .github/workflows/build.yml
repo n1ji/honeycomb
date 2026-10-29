@@ -2,14 +2,13 @@ name: Build
 
 # Actions are pinned to commit hashes (the tag they were is in the comment).
 #
-# Alpha builds: push a tag made by scripts/release.sh, like v0.1.1 (builds every
-# platform, with that version's CHANGELOG.md section as the notes), or run
+# Alpha builds: push a tag made by scripts/release.sh, like v0.1.1 (builds macOS
+# and Windows, with that version's CHANGELOG.md section as the notes), or run
 # manually from the Actions tab and pick the platforms. Builds a universal macOS
-# .dmg, a Windows installer, and Linux AppImage/.deb/.rpm packages, and attaches
-# them to a draft pre-release.
+# .dmg, a Windows installer, and (on manual runs that ask for it) Linux
+# AppImage/.deb/.rpm packages, and attaches them to a draft pre-release.
 #
-# While the repo is private, macOS minutes count 10x against the free quota
-# (Windows 2x), so manual runs skip macOS by default; build the Mac app locally.
+# Linux joins tag builds when it's ready for a release: add it to the tag default in the plan job.
 on:
   push:
     tags: ["v*"]
@@ -31,7 +30,7 @@ jobs:
       - id: matrix
         shell: bash
         env:
-          WANT: ${{ github.event_name == 'workflow_dispatch' && inputs.platforms || 'macos,windows,linux' }}
+          WANT: ${{ github.event_name == 'workflow_dispatch' && inputs.platforms || 'macos,windows' }}
         run: |
           rows=()
           [[ ",$WANT," == *",macos,"* ]] && rows+=('{"name":"macos","platform":"macos-latest","args":"--target universal-apple-darwin"}')
@@ -76,6 +75,23 @@ jobs:
 
       - run: npm ci
 
+      # The scrobbling plugin's Last.fm API key, from the repo's secrets. It's
+      # written into the bundled plugin here and never committed; builds
+      # without it ask users for their own key.
+      - name: Last.fm key for the scrobbling plugin
+        shell: bash
+        env:
+          LASTFM_KEY: ${{ secrets.HONEYCOMB_LASTFM_KEY }}
+          LASTFM_SECRET: ${{ secrets.HONEYCOMB_LASTFM_SECRET }}
+        run: |
+          if [ -n "$LASTFM_KEY" ] && [ -n "$LASTFM_SECRET" ]; then
+            node -e 'const { LASTFM_KEY: key, LASTFM_SECRET: secret } = process.env;
+              require("fs").writeFileSync("plugins/scrobbling/lastfm-key.js", "export default " + JSON.stringify({ key, secret }) + ";\n");'
+            echo "Last.fm key added."
+          else
+            echo "No Last.fm key in the repo secrets; this build asks users for their own."
+          fi
+
       # The release body is this version's CHANGELOG.md section (Unreleased
       # on manual runs), followed by the install notes.
       - name: Release notes
@@ -92,10 +108,6 @@ jobs:
       - uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Baked into the app for Last.fm scrobbling; builds without them
-          # just can't sign in to Last.fm.
-          HONEYCOMB_LASTFM_KEY: ${{ secrets.HONEYCOMB_LASTFM_KEY }}
-          HONEYCOMB_LASTFM_SECRET: ${{ secrets.HONEYCOMB_LASTFM_SECRET }}
         with:
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || format('build-{0}', github.run_number) }}
           releaseName: Honeycomb ${{ github.ref_type == 'tag' && github.ref_name || format('build {0}', github.run_number) }}
@@ -105,7 +117,6 @@ jobs:
             Alpha build. Not code-signed yet:
             - macOS: open Honeycomb once and close the warning, then System Settings → Privacy & Security → "Open Anyway" (or run `xattr -cr /Applications/Honeycomb.app`).
             - Windows: SmartScreen may warn; choose "More info" → "Run anyway".
-            - Linux: the AppImage runs on most distros (`chmod +x` it first); .deb for Debian/Ubuntu, .rpm for Fedora/openSUSE.
           releaseDraft: true
           prerelease: true
           args: ${{ matrix.args }}

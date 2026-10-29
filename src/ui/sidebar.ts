@@ -1,6 +1,7 @@
 import { artistOf, Filters, store, View } from "../store";
 import { $, h } from "../util";
 import { addToPlaylist, clearInbox, importPlaylist, newPlaylist, openPlaylistMenu, run } from "./actions";
+import { onSidebarItems, sidebarItems } from "../plugins";
 import { openMenu } from "./menu";
 import { openSettings } from "./settings";
 import { openSmartEditor } from "./smarteditor";
@@ -29,8 +30,8 @@ export function mountSidebar() {
     h(
       "div",
       { class: "sidebar-footer" },
-      h("button", { class: "icon-btn", title: "Settings", onclick: () => openSettings() }, "⚙ Settings"),
-      h("button", { class: "icon-btn", title: "Sync to a player or flash drive", onclick: () => openSync() }, "⇅ Sync"),
+      h("button", { class: "icon-btn", title: "Settings", onclick: () => openSettings() }, h("span", { class: "ic" }, "⚙"), h("span", { class: "label" }, "Settings")),
+      h("button", { class: "icon-btn", title: "Sync to a player or flash drive", onclick: () => openSync() }, h("span", { class: "ic" }, "⇅"), h("span", { class: "label" }, "Sync")),
       mountUpdateBulb(),
     ),
   );
@@ -48,6 +49,7 @@ export function mountSidebar() {
 
   // Library entries, then a dropdown that picks what the rest of the bar lists.
   const libBlock = h("div", {});
+  const pluginBlock = h("div", {});
   const mode = h("select", { class: "input list-mode", title: "What this list shows" });
   for (const [k, label] of Object.entries(LIST_MODES)) mode.append(h("option", { value: k }, label));
   const actions = h(
@@ -72,7 +74,7 @@ export function mountSidebar() {
   );
   const filter = h("input", { type: "search", class: "input list-filter", placeholder: "Filter", spellcheck: "false" });
   const listBlock = h("div", { class: "nav-list" });
-  nav.append(libBlock, h("div", { class: "list-mode-row" }, mode, actions), filter, listBlock);
+  nav.append(libBlock, pluginBlock, h("div", { class: "list-mode-row" }, mode, actions), filter, listBlock);
 
   const currentMode = (): ListMode => {
     const m = store.settings.sidebarList as ListMode;
@@ -105,6 +107,23 @@ export function mountSidebar() {
       }),
     );
   };
+
+  /** Entries plugins added, under their own heading. */
+  const renderPluginItems = () => {
+    pluginBlock.replaceChildren(
+      ...(sidebarItems.length ? [h("div", { class: "nav-head" }, h("span", {}, "Plugins"))] : []),
+      ...sidebarItems.map((it) =>
+        h(
+          "div",
+          { class: "nav-item", onclick: () => it.onClick() },
+          h("span", { class: "nav-icon" }, it.icon),
+          h("span", { class: "nav-label" }, it.label),
+          it.badge ? h("span", { class: "badge" }, it.badge) : null,
+        ),
+      ),
+    );
+  };
+  onSidebarItems(renderPluginItems);
 
   const renderPlaylists = () => {
     const pls = store.playlists;

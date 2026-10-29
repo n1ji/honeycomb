@@ -100,7 +100,15 @@ struct QueueEvent {
     error: Option<String>,
 }
 
-/// The song being listened to, followed for scrobbling.
+/// How long a song of `duration` seconds has to be heard before it counts as
+/// listened to (Last.fm's rule: half of it or 4 minutes), or None for songs of
+/// 30 seconds or less.
+pub fn listen_threshold(duration: f64) -> Option<f64> {
+    (duration > 30.0).then(|| (duration / 2.0).min(240.0))
+}
+
+/// The song being listened to, followed for the `player-now-playing` and
+/// `player-listened` events (plugins scrobble from them).
 struct Listen {
     uid: u64,
     track_id: i64,
@@ -766,8 +774,8 @@ impl<R: Runtime> Engine<R> {
         self.emit_tick(force);
     }
 
-    /// Tell the scrobbler when a song starts, and once it has been heard
-    /// long enough to count.
+    /// Announce when a song starts playing, and once it has been heard long
+    /// enough to count as listened to.
     fn follow_listen(&mut self) {
         let Some(q) = self.current.and_then(|c| self.queue.get(c)).cloned() else {
             self.listen = None;
@@ -795,16 +803,18 @@ impl<R: Runtime> Engine<R> {
         let Some(l) = self.listen.as_mut() else { return };
         if playing && !l.announced {
             l.announced = true;
-            crate::scrobble::now_playing(l.track_id);
+            let _ = self.app.emit("player-now-playing", serde_json::json!({ "trackId": l.track_id }));
         }
         let delta = pos - l.last_pos;
         if playing && delta > 0.0 && delta < 2.0 {
             l.heard += delta;
         }
         l.last_pos = pos;
-        if !l.scrobbled && crate::scrobble::threshold(q.duration).is_some_and(|t| l.heard >= t) {
+        if !l.scrobbled && listen_threshold(q.duration).is_some_and(|t| l.heard >= t) {
             l.scrobbled = true;
-            crate::scrobble::listened(&self.db_path, l.track_id, l.started_at);
+            let _ = self
+                .app
+                .emit("player-listened", serde_json::json!({ "trackId": l.track_id, "playedAt": l.started_at }));
         }
     }
 
@@ -904,6 +914,13 @@ fn file_stem(path: &str) -> String {
 /// skip through each of them.
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn listen_threshold_follows_lastfm_rules() {
+        assert_eq!(super::listen_threshold(30.0), None);
+        assert_eq!(super::listen_threshold(100.0), Some(50.0));
+        assert_eq!(super::listen_threshold(1200.0), Some(240.0));
+    }
+
     use super::*;
     use crate::kaseki::tests::write_wav;
     use std::sync::{Arc, Mutex};

@@ -6,7 +6,7 @@ import { run } from "./actions";
 import { button, modal } from "./dialogs";
 import { openColumnsCustomizer, openPlayerBarCustomizer, setLayoutSetting } from "./customize";
 import { openImporter } from "./importer";
-import { scrobblingSection } from "./scrobbling";
+import { pluginsSection } from "./pluginsettings";
 
 export const ACCENTS = ["#f5a623", "#e8590c", "#e03131", "#d6336c", "#ae3ec9", "#4c6ef5", "#1c7ed6", "#0ca678", "#74b816"];
 
@@ -261,7 +261,6 @@ export async function openSettings() {
       }),
     ),
     h("p", { class: "muted" }, `${store.tracks.size.toLocaleString()} tracks in library. Honeycomb never moves or deletes your files.`),
-    ...scrobblingSection(),
     h("h3", {}, "Lyrics"),
     lyricsToggle(),
     h(
@@ -269,6 +268,7 @@ export async function openSettings() {
       { class: "muted" },
       "Lyrics in the file or a .lrc file next to it are always used. Online lookup asks LRCLIB (lrclib.net, a free lyrics database) for the rest, sending the song's title, artist, album and length.",
     ),
+    ...pluginsSection(),
     h("h3", {}, "Appearance"),
     h("label", { class: "field inline" }, h("span", {}, "Theme"), theme),
     h("label", { class: "field inline" }, h("span", {}, "Row density"), density),

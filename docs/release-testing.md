@@ -38,7 +38,7 @@ The self-test can't hear anything, so these need a person:
 - [ ] Unplug headphones while playing: playback pauses, and doesn't jump to the speakers.
 - [ ] Media keys and the system's Now Playing controls work, and show the cover.
 - [ ] Whatever this release changed (read its CHANGELOG section) works.
-- [ ] If scrobbling changed: a song shows as "now playing" on Last.fm, then as a scrobble.
+- [ ] If scrobbling changed: with the Scrobbling plugin on (Settings → Plugins), a song shows as "now playing" on Last.fm, then as a scrobble. On a CI build, Settings shows "Sign in…" rather than "this build has no Last.fm API key".
 - [ ] If sync changed: sync to a USB stick (never to a real music collection), then play it in another device.
 
 ## 4. Publish

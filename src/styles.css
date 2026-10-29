@@ -110,7 +110,9 @@ textarea {
 
 body {
   display: grid;
-  grid-template-rows: 1fr auto;
+  grid-template-rows: minmax(0, 1fr) auto;
+  /* Without this the column grows to fit its content and the window cuts off the right side. */
+  grid-template-columns: minmax(0, 1fr);
 }
 
 #app {
@@ -338,6 +340,27 @@ body {
   display: flex;
   align-items: center;
   gap: 4px;
+}
+
+.sidebar-footer .icon-btn {
+  width: auto;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+/* Both glyphs in the same box, so ⚙ and ⇅ line up with each other and the text. */
+.sidebar-footer .ic {
+  width: 16px;
+  font-size: 15px;
+  line-height: 1;
+  text-align: center;
+}
+
+.sidebar-footer .bulb {
+  margin-left: auto;
 }
 
 /* ---------- update bulb ---------- */
@@ -1293,16 +1316,23 @@ textarea.input {
   gap: 4px;
 }
 
-/* ---------- scrobbling and sync ---------- */
+/* ---------- plugins and sync ---------- */
 
-.scrobbling {
+.plugin-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.plugin-row p {
+  margin: 2px 0 0 22px;
+}
+
+.plugin-settings {
   display: flex;
   flex-direction: column;
   gap: 8px;
-}
-
-.scrobbling .row > span:first-child {
-  min-width: 110px;
 }
 
 .sync-lists {
@@ -1558,6 +1588,9 @@ input[type="color"] {
 @media (max-width: 760px) {
   #sidebar {
     width: 160px;
+  }
+  .sidebar-footer .label {
+    display: none;
   }
   #search {
     width: 140px;

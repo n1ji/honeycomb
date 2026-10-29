@@ -40,10 +40,12 @@ unicode-normalization = "0.1"
 # LRCLIB lyrics lookups.
 ureq = { version = "2", features = ["json"] }
 # Last.fm request signatures are MD5 hashes.
-md5 = "0.7"
 # Free space on a sync destination.
 fs2 = "0.4"
 souvlaki = { version = "0.8", default-features = false, features = ["use_zbus"] }
+# Login tokens in the system credential store (Keychain, Credential Manager,
+# Secret Service over zbus, so Linux still needs no libdbus).
+keyring = "4.2"
 
 [dev-dependencies]
 # Mock runtime for driving the player in tests.

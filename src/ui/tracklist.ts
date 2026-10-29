@@ -12,7 +12,10 @@ const OVERSCAN = 8;
 interface Col {
   key: SortKey;
   label: string;
-  width: string;
+  /** Fixed width; columns without one stretch (`grow`) and shrink down to `min` pixels. */
+  width?: string;
+  min?: number;
+  grow?: number;
   /** Name in menus when the header label is too short to say what it is. */
   menuLabel?: string;
   cls?: string;
@@ -22,16 +25,16 @@ interface Col {
 /** Every column the list can show; `layout.columnsShown` picks which ones and their order. */
 export const COLS: Col[] = [
   { key: "trackNo", label: "#", menuLabel: "Track number", width: "44px", cls: "num" },
-  { key: "title", label: "Title", width: "minmax(160px, 2fr)" },
-  { key: "artist", label: "Artist", width: "minmax(110px, 1.3fr)" },
-  { key: "album", label: "Album", width: "minmax(110px, 1.3fr)" },
+  { key: "title", label: "Title", min: 80, grow: 2 },
+  { key: "artist", label: "Artist", min: 60, grow: 1.3 },
+  { key: "album", label: "Album", min: 60, grow: 1.3 },
   { key: "year", label: "Year", width: "52px", cls: "num", render: (t) => (t.year ? String(t.year) : "") },
-  { key: "genre", label: "Genre", width: "minmax(70px, 0.7fr)" },
+  { key: "genre", label: "Genre", min: 44, grow: 0.7 },
   { key: "duration", label: "Time", width: "56px", cls: "num", render: (t) => fmtTime(t.duration) },
-  { key: "rating", label: "Rating", width: "86px" },
+  { key: "rating", label: "Rating", width: "90px" },
   { key: "playCount", label: "Plays", width: "50px", cls: "num", render: (t) => (t.playCount ? String(t.playCount) : "") },
-  { key: "albumArtist", label: "Album Artist", width: "minmax(110px, 1.2fr)" },
-  { key: "composer", label: "Composer", width: "minmax(100px, 1fr)" },
+  { key: "albumArtist", label: "Album Artist", min: 60, grow: 1.2 },
+  { key: "composer", label: "Composer", min: 60, grow: 1 },
   { key: "discNo", label: "Disc", width: "44px", cls: "num", render: (t) => (t.discNo ? String(t.discNo) : "") },
   { key: "format", label: "Format", width: "64px" },
   { key: "bitrate", label: "Bitrate", width: "74px", cls: "num", render: (t) => (t.bitrate ? `${t.bitrate} kbps` : "") },
@@ -44,7 +47,7 @@ export const COLS: Col[] = [
   },
   { key: "dateAdded", label: "Added", menuLabel: "Date added", width: "92px", cls: "num", render: (t) => fmtDate(t.dateAdded) },
   { key: "lastPlayed", label: "Last Played", width: "92px", cls: "num", render: (t) => fmtDate(t.lastPlayed) },
-  { key: "comment", label: "Comment", width: "minmax(100px, 1fr)" },
+  { key: "comment", label: "Comment", min: 60, grow: 1 },
 ];
 
 export const DEFAULT_COLUMNS = ["trackNo", "title", "artist", "album", "year", "genre", "duration", "rating", "playCount"];
@@ -73,9 +76,15 @@ function colWidths(): Record<string, number> {
   }
 }
 
+/** A column's grid track. A resized stretchy column keeps its width but still shrinks in narrow windows. */
+function track(c: Col, saved: number | undefined): string {
+  if (c.width) return saved ? `${saved}px` : c.width;
+  return `minmax(${c.min}px, ${saved ? `${saved}px` : `${c.grow}fr`})`;
+}
+
 /** Header and rows share one grid template through a CSS variable. */
 function applyColumns(widths = colWidths()) {
-  const template = shown().map((c) => (widths[c.key] ? `${widths[c.key]}px` : c.width)).join(" ");
+  const template = shown().map((c) => track(c, widths[c.key])).join(" ");
   $("#tracklist").style.setProperty("--tl-cols", template);
 }
 

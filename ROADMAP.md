@@ -43,7 +43,7 @@ This is a plan, not a promise. Each month has a "done when" line. Whatever slips
 
 **Done when:** a week of daily listening shows up correctly on Last.fm, including songs played offline.
 
-**Note:** Last.fm needs an API key and secret built into the app. Every desktop scrobbler does this, and it's fine.
+**Note:** Last.fm needs an API key and secret in the app. Scrobbling is a plugin that ships with Honeycomb, and CI writes the key into it from the repo's encrypted secrets at build time, so it's never in the repo. Builds without it ask users for their own key.
 
 ## Month 3 (January): sync to flash drives and USB players
 
