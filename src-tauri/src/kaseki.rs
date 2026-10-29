@@ -131,6 +131,8 @@ pub struct Output {
     pub rate: u32,
     pub channels: usize,
     pub device: Option<String>,
+    /// Sample format the device takes ("f32", "i16"…).
+    pub format: String,
     default_rate: u32,
     /// Sample-rate ranges the device offers at this channel count and format.
     rates: Vec<(u32, u32)>,
@@ -202,7 +204,16 @@ impl Output {
             }
             Err(e) => return Err(e),
         };
-        let out = Output { stream, shared, rate, channels: channels as usize, device: name, default_rate, rates };
+        let out = Output {
+            stream,
+            shared,
+            rate,
+            channels: channels as usize,
+            device: name,
+            format: format.to_string(),
+            default_rate,
+            rates,
+        };
         Ok((out, prod))
     }
 
@@ -360,6 +371,62 @@ impl Feeder {
 }
 
 // ---------- decoding ----------
+
+/// What a file holds, as its container and codec describe it.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceInfo {
+    /// "FLAC", "ALAC", "MP3", "AAC", "PCM"…
+    pub codec: String,
+    pub lossless: bool,
+    pub bits: Option<u32>,
+    pub rate: Option<u32>,
+    pub channels: Option<usize>,
+}
+
+/// Read a file's codec details without decoding any of it.
+pub fn probe(path: &str) -> Option<SourceInfo> {
+    let file = File::open(path).ok()?;
+    let mut hint = Hint::new();
+    if let Some(ext) = std::path::Path::new(path).extension().and_then(|e| e.to_str()) {
+        hint.with_extension(ext);
+    }
+    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+    catch_unwind(AssertUnwindSafe(|| {
+        let probed = symphonia::default::get_probe()
+            .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
+            .ok()?;
+        let p = &probed.format.tracks().iter().find(|t| t.codec_params.codec != CODEC_TYPE_NULL)?.codec_params;
+        let (codec, lossless) = codec_name(p.codec);
+        Some(SourceInfo {
+            codec,
+            lossless,
+            bits: p.bits_per_sample.or(p.bits_per_coded_sample).filter(|_| lossless),
+            rate: p.sample_rate,
+            channels: p.channels.map(|c| c.count()),
+        })
+    }))
+    .ok()
+    .flatten()
+}
+
+/// A codec's display name, and whether it's lossless.
+fn codec_name(codec: symphonia::core::codecs::CodecType) -> (String, bool) {
+    use symphonia::core::codecs::*;
+    let short = symphonia::default::get_codecs().get_codec(codec).map(|d| d.short_name).unwrap_or("");
+    match codec {
+        CODEC_TYPE_FLAC | CODEC_TYPE_ALAC | CODEC_TYPE_TTA => (short.to_ascii_uppercase(), true),
+        CODEC_TYPE_WAVPACK => ("WavPack".into(), true),
+        CODEC_TYPE_MONKEYS_AUDIO => ("APE".into(), true),
+        CODEC_TYPE_VORBIS => ("Vorbis".into(), false),
+        CODEC_TYPE_OPUS => ("Opus".into(), false),
+        // A-law and mu-law squeeze samples into 8 bits, so they don't count.
+        CODEC_TYPE_PCM_ALAW | CODEC_TYPE_PCM_MULAW => ("PCM".into(), false),
+        _ if short.starts_with("pcm_") => ("PCM".into(), true),
+        _ if short.is_empty() => ("Unknown".into(), false),
+        _ => (short.to_ascii_uppercase(), false),
+    }
+}
 
 /// An open, decodable audio file.
 pub struct Source {
@@ -1529,6 +1596,33 @@ pub(crate) mod tests {
         f.fill(&mut out);
         assert!(out.iter().all(|&s| s == 0.0));
         assert!(prod.slots() < 4096, "paused audio stays buffered");
+    }
+
+    #[test]
+    fn probe_reads_codec_bits_and_rate() {
+        let make = |name: &str, args: &[&str]| {
+            let path = tmp(name);
+            let ok = std::process::Command::new("ffmpeg")
+                .args(["-y", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=96000:duration=1"])
+                .args(args)
+                .arg(&path)
+                .status()
+                .is_ok_and(|s| s.success());
+            ok.then(|| path.to_string_lossy().into_owned())
+        };
+        let Some(flac) = make("probe24.flac", &["-c:a", "flac", "-sample_fmt", "s32", "-bits_per_raw_sample", "24"]) else {
+            eprintln!("ffmpeg not available; skipping");
+            return;
+        };
+        let info = probe(&flac).unwrap();
+        assert_eq!(
+            info,
+            SourceInfo { codec: "FLAC".into(), lossless: true, bits: Some(24), rate: Some(96000), channels: Some(1) }
+        );
+        let mp3 = make("probe.mp3", &["-ar", "44100", "-c:a", "libmp3lame", "-b:a", "192k"]).unwrap();
+        let info = probe(&mp3).unwrap();
+        assert_eq!((info.codec.as_str(), info.lossless, info.bits, info.rate), ("MP3", false, None, Some(44100)));
+        assert_eq!(probe("/no/such/file.flac"), None);
     }
 
     #[test]

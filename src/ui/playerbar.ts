@@ -9,6 +9,7 @@ import { mountLyrics } from "./lyrics";
 import { run } from "./actions";
 import { revealPlaying } from "./tracklist";
 import { openMenu } from "./menu";
+import { mountQualityBadge } from "./quality";
 
 /** Transport buttons, in their default order. `layout.pbButtons` picks which show and where. */
 export const PB_BUTTONS = [
@@ -93,7 +94,7 @@ export function mountPlayerBar() {
     "div",
     { class: "pb-left", title: "Show playing track", onclick: () => revealPlaying() },
     art,
-    h("div", { class: "pb-meta" }, title, artist),
+    h("div", { class: "pb-meta" }, h("div", { class: "pb-title-row" }, title, mountQualityBadge()), artist),
   );
   const seekRow = h("div", { class: "pb-seek" }, pos, seek, dur);
   const right = h("div", { class: "pb-right" }, volIcon, volume);
@@ -231,7 +232,7 @@ export function mountNowPlaying() {
         h(
           "div",
           { class: "np-tech muted" },
-          [t.format, t.bitrate && `${t.bitrate} kbps`, t.sampleRate && `${(t.sampleRate / 1000).toFixed(1)} kHz`]
+          [t.format, t.bitDepth && `${t.bitDepth}-bit`, t.bitrate && `${t.bitrate} kbps`, t.sampleRate && `${(t.sampleRate / 1000).toFixed(1)} kHz`]
             .filter(Boolean)
             .join(" · "),
         ),

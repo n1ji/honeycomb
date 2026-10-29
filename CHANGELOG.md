@@ -6,6 +6,9 @@ and uses it as the GitHub release notes.
 
 ## Unreleased
 
+- You can finally see what quality you're listening at. There's a little badge next to the song title in the player bar (like `FLAC 24/96` or `MP3 320`, gold for lossless), and clicking it shows the whole signal path: the file, whether it gets resampled or downmixed, the volume, and what the output device runs at. If something changes the audio on the way out, the badge gets a small orange dot.
+- Honeycomb now knows the bit depth of lossless files. There's a Bit Depth column and a smart playlist rule for it, so "everything 24-bit" is one rule away. Lossless files get read again once on the first scan after updating to fill it in.
+
 ## 0.1.1, 2026-10-29
 
 So this one is a big one. The two things I promised right after the alpha are here, scrobbling and syncing to players, plus a plugin system that scrobbling now runs on, and a whole lot of security work that happened before the repo went public.

@@ -1,4 +1,4 @@
-import { api, Playlist, QueueState, Tick, Track } from "./api";
+import { api, Playlist, QueueState, Signal, Tick, Track } from "./api";
 
 export type View = { kind: "library" } | { kind: "inbox" } | { kind: "queue" } | { kind: "playlist"; id: number };
 
@@ -12,7 +12,7 @@ export interface Filters {
   album: string | null;
 }
 
-type Topic = "tracks" | "view" | "visible" | "selection" | "playlists" | "queue" | "tick" | "settings";
+type Topic = "tracks" | "view" | "visible" | "selection" | "playlists" | "queue" | "tick" | "signal" | "settings";
 
 class Store {
   tracks = new Map<number, Track>();
@@ -44,6 +44,7 @@ class Store {
 
   queue: QueueState = { trackIds: [], current: null, shuffle: false, repeat: "off", volume: 0.8, error: null };
   tick: Tick = { trackId: null, position: 0, duration: 0, playing: false };
+  signal: Signal | null = null;
 
   private subs = new Map<Topic, Set<() => void>>();
 

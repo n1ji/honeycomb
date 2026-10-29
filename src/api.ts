@@ -27,6 +27,8 @@ export interface Track {
   loved: boolean;
   /** Newly found and not reviewed yet. */
   inbox: boolean;
+  /** Bits per sample, for lossless files. */
+  bitDepth: number | null;
 }
 
 export interface SmartRule {
@@ -59,6 +61,14 @@ export interface QueueState {
   repeat: Repeat;
   volume: number;
   error: string | null;
+}
+
+/** What's playing and how it reaches the speakers (`player-signal`). */
+export interface Signal {
+  trackId: number;
+  source: { codec: string; lossless: boolean; bits: number | null; rate: number | null; channels: number | null } | null;
+  /** Null while the output is closed. */
+  output: { device: string | null; rate: number; channels: number; format: string } | null;
 }
 
 export interface Tick {

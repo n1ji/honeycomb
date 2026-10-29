@@ -1,5 +1,5 @@
 import { listen } from "@tauri-apps/api/event";
-import { api, QueueState, Tick } from "./api";
+import { api, QueueState, Signal, Tick } from "./api";
 import { perfEnabled, runBenchmark } from "./perf";
 import { loadPlugins } from "./plugins";
 import { store } from "./store";
@@ -48,6 +48,10 @@ async function main() {
   await listen<Tick>("player-tick", (e) => {
     store.tick = e.payload;
     store.emit("tick");
+  });
+  await listen<Signal | null>("player-signal", (e) => {
+    store.signal = e.payload;
+    store.emit("signal");
   });
   await listen<QueueState>("player-queue", (e) => {
     const prevError = store.queue.error;

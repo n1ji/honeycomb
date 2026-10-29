@@ -89,6 +89,25 @@ struct Tick {
     playing: bool,
 }
 
+/// What's playing and how it reaches the speakers, for the quality badge.
+#[derive(Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct Signal {
+    track_id: i64,
+    source: Option<kaseki::SourceInfo>,
+    /// `None` while the output is closed (paused for a while, or no device).
+    output: Option<OutputInfo>,
+}
+
+#[derive(Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct OutputInfo {
+    device: Option<String>,
+    rate: u32,
+    channels: usize,
+    format: String,
+}
+
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct QueueEvent {
@@ -179,6 +198,9 @@ struct Engine<R: Runtime> {
     media_last_index: Option<usize>,
     last_tick: Option<Tick>,
     listen: Option<Listen>,
+    /// (queue item uid, what `kaseki::probe` found in its file).
+    probed: Option<(u64, Option<kaseki::SourceInfo>)>,
+    last_signal: Option<Signal>,
 }
 
 impl<R: Runtime> Engine<R> {
@@ -213,6 +235,8 @@ impl<R: Runtime> Engine<R> {
             media_last_index: None,
             last_tick: None,
             listen: None,
+            probed: None,
+            last_signal: None,
         }
     }
 
@@ -771,7 +795,32 @@ impl<R: Runtime> Engine<R> {
         self.fix_preload();
         self.sync_media();
         self.follow_listen();
+        self.follow_signal(force);
         self.emit_tick(force);
+    }
+
+    /// Send `player-signal` when the track or the output changes.
+    fn follow_signal(&mut self, force: bool) {
+        let sig = self.current.and_then(|c| self.queue.get(c)).map(|q| {
+            if self.probed.as_ref().map(|p| p.0) != Some(q.uid) {
+                self.probed = Some((q.uid, kaseki::probe(&q.path)));
+            }
+            Signal {
+                track_id: q.track_id,
+                source: self.probed.as_ref().and_then(|p| p.1.clone()),
+                output: self.out.as_ref().map(|o| OutputInfo {
+                    device: o.device.clone(),
+                    rate: o.rate,
+                    channels: o.channels,
+                    format: o.format.clone(),
+                }),
+            }
+        });
+        if !force && sig == self.last_signal {
+            return;
+        }
+        let _ = self.app.emit("player-signal", &sig);
+        self.last_signal = sig;
     }
 
     /// Announce when a song starts playing, and once it has been heard long

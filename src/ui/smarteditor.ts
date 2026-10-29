@@ -21,6 +21,7 @@ const FIELDS: { key: string; label: string; kind: Kind }[] = [
   { key: "playCount", label: "Play count", kind: "num" },
   { key: "duration", label: "Length (seconds)", kind: "num" },
   { key: "bitrate", label: "Bitrate (kbps)", kind: "num" },
+  { key: "bitDepth", label: "Bit depth", kind: "num" },
   { key: "dateAdded", label: "Date added", kind: "date" },
   { key: "lastPlayed", label: "Last played", kind: "date" },
 ];

@@ -96,6 +96,7 @@ pub fn read_track_with(path: &Path, has_folder_art: &dyn Fn(&Path) -> bool) -> R
         has_art: has_tag_art || has_folder_art(path),
         loved: false,
         inbox: false,
+        bit_depth: props.bit_depth(),
     })
 }
 

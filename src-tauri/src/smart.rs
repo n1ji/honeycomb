@@ -32,6 +32,7 @@ fn column(field: &str) -> Option<(&'static str, Kind)> {
         "loved" => ("loved", Kind::Num),
         "playCount" => ("play_count", Kind::Num),
         "bitrate" => ("bitrate", Kind::Num),
+        "bitDepth" => ("bit_depth", Kind::Num),
         "dateAdded" => ("date_added", Kind::Date),
         "lastPlayed" => ("last_played", Kind::Date),
         _ => return None,

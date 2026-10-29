@@ -45,6 +45,7 @@ export const COLS: Col[] = [
     cls: "num",
     render: (t) => (t.sampleRate ? `${(t.sampleRate / 1000).toFixed(1)} kHz` : ""),
   },
+  { key: "bitDepth", label: "Bit Depth", width: "70px", cls: "num", render: (t) => (t.bitDepth ? `${t.bitDepth}-bit` : "") },
   { key: "dateAdded", label: "Added", menuLabel: "Date added", width: "92px", cls: "num", render: (t) => fmtDate(t.dateAdded) },
   { key: "lastPlayed", label: "Last Played", width: "92px", cls: "num", render: (t) => fmtDate(t.lastPlayed) },
   { key: "comment", label: "Comment", min: 60, grow: 1 },

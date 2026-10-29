@@ -31,6 +31,8 @@ pub struct Track {
     pub loved: bool,
     /// Newly found and not reviewed yet.
     pub inbox: bool,
+    /// Bits per sample, for lossless files.
+    pub bit_depth: Option<u8>,
 }
 
 /// The whole library for the UI in a compact form: the field names once, then
@@ -39,7 +41,7 @@ pub struct Track {
 pub struct TrackTable(pub Vec<Track>);
 
 /// `Track`'s fields as the UI names them, in the order `TrackTable` sends them.
-pub const TRACK_FIELDS: [&str; 24] = [
+pub const TRACK_FIELDS: [&str; 25] = [
     "id",
     "path",
     "title",
@@ -64,6 +66,7 @@ pub const TRACK_FIELDS: [&str; 24] = [
     "hasArt",
     "loved",
     "inbox",
+    "bitDepth",
 ];
 
 impl Serialize for TrackTable {
@@ -107,6 +110,7 @@ impl Serialize for TrackTable {
                 r.serialize_element(&t.has_art)?;
                 r.serialize_element(&t.loved)?;
                 r.serialize_element(&t.inbox)?;
+                r.serialize_element(&t.bit_depth)?;
                 r.end()
             }
         }
@@ -209,6 +213,7 @@ mod tests {
             has_art: true,
             loved: true,
             inbox: false,
+            bit_depth: Some(24),
         };
         let obj = serde_json::to_value(&t).unwrap();
         let table = serde_json::to_value(TrackTable(vec![t])).unwrap();

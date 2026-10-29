@@ -61,6 +61,8 @@
 
 :root {
   --accent: #f5a623;
+  --ok: #4caf7a;
+  --warn: #e8743b;
   --selection: color-mix(in srgb, var(--accent) 30%, transparent);
   --accent-text: color-mix(in srgb, var(--accent) 80%, var(--text));
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
@@ -974,6 +976,122 @@ body.resizing {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.pb-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.pb-title-row .pb-title {
+  min-width: 0;
+}
+
+/* ---------- quality badge and signal path ---------- */
+
+.quality {
+  position: relative;
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  font: 600 10px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+}
+
+.quality[hidden] {
+  display: none;
+}
+
+.quality:hover,
+.quality.open {
+  background: var(--hover);
+}
+
+/* Any lossless file gets the gold badge; lossy ones stay grey. */
+.quality.lossless,
+.quality.hires {
+  color: var(--accent-text);
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+/* A small dot when the audio is resampled or downmixed on its way out. */
+.quality.changed::after {
+  content: "";
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warn);
+  box-shadow: 0 0 0 2px var(--panel);
+}
+
+.quality-pop {
+  position: fixed;
+  z-index: 100;
+  width: 320px;
+  max-width: calc(100vw - 16px);
+  padding: 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px var(--shadow);
+}
+
+.quality-head {
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+.quality-stage {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 5px 0;
+}
+
+.quality-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.quality-stage.ok .quality-dot {
+  background: var(--ok);
+}
+
+.quality-stage.change .quality-dot {
+  background: var(--warn);
+}
+
+.quality-title {
+  font-weight: 500;
+}
+
+.quality-detail {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.quality-summary {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.quality-note {
+  margin-top: 4px;
+  font-size: 11px;
 }
 
 .pb-artist {

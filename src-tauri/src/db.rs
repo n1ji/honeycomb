@@ -7,7 +7,7 @@ use crate::models::{Playlist, SmartRules, Track};
 
 pub const TRACK_COLS: &str = "id, path, title, artist, album_artist, album, genre, composer, comment, \
      year, track_no, disc_no, duration, bitrate, sample_rate, format, rating, play_count, \
-     last_played, date_added, mtime, has_art, loved, inbox";
+     last_played, date_added, mtime, has_art, loved, inbox, bit_depth";
 
 pub fn open(path: &Path) -> Result<Connection> {
     let conn = Connection::open(path)?;
@@ -95,6 +95,18 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         // now and keeps its own queue.
         conn.execute_batch("BEGIN; DROP TABLE IF EXISTS scrobbles; PRAGMA user_version = 4; COMMIT;")?;
     }
+    if version < 5 {
+        // v5: bit depth. Forgetting the mtime of lossless files makes the next
+        // scan read them again and fill it in.
+        conn.execute_batch(
+            "BEGIN;
+             ALTER TABLE tracks ADD COLUMN bit_depth INTEGER;
+             UPDATE tracks SET mtime = 0
+                WHERE upper(format) IN ('FLAC', 'WAV', 'AIF', 'AIFF', 'M4A', 'ALAC', 'APE', 'WV');
+             PRAGMA user_version = 5;
+             COMMIT;",
+        )?;
+    }
     Ok(())
 }
 
@@ -124,6 +136,7 @@ pub fn row_to_track(row: &Row) -> rusqlite::Result<Track> {
         has_art: row.get(21)?,
         loved: row.get(22)?,
         inbox: row.get(23)?,
+        bit_depth: row.get(24)?,
     })
 }
 
@@ -164,19 +177,19 @@ pub fn track_id_by_path(conn: &Connection, path: &str) -> Result<Option<i64>> {
 pub fn upsert_track(conn: &Connection, t: &Track) -> Result<i64> {
     conn.execute(
         "INSERT INTO tracks (path, title, artist, album_artist, album, genre, composer, comment,
-            year, track_no, disc_no, duration, bitrate, sample_rate, format, date_added, mtime, has_art)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
+            year, track_no, disc_no, duration, bitrate, sample_rate, format, date_added, mtime, has_art, bit_depth)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
          ON CONFLICT(path) DO UPDATE SET
             title = excluded.title, artist = excluded.artist, album_artist = excluded.album_artist,
             album = excluded.album, genre = excluded.genre, composer = excluded.composer,
             comment = excluded.comment, year = excluded.year, track_no = excluded.track_no,
             disc_no = excluded.disc_no, duration = excluded.duration, bitrate = excluded.bitrate,
             sample_rate = excluded.sample_rate, format = excluded.format, mtime = excluded.mtime,
-            has_art = excluded.has_art",
+            has_art = excluded.has_art, bit_depth = excluded.bit_depth",
         params![
             t.path, t.title, t.artist, t.album_artist, t.album, t.genre, t.composer, t.comment,
             t.year, t.track_no, t.disc_no, t.duration, t.bitrate, t.sample_rate, t.format,
-            t.date_added, t.mtime, t.has_art
+            t.date_added, t.mtime, t.has_art, t.bit_depth
         ],
     )?;
     Ok(track_id_by_path(conn, &t.path)?.unwrap_or_default())
@@ -294,7 +307,29 @@ mod tests {
         let t = &all_tracks(&conn).unwrap()[0];
         assert!(!t.loved && !t.inbox);
         let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-        assert_eq!(v, 4);
+        assert_eq!(v, 5);
+    }
+
+    #[test]
+    fn v5_migration_rereads_lossless_files() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        conn.execute_batch(
+            "ALTER TABLE tracks DROP COLUMN bit_depth;
+             PRAGMA user_version = 4;
+             INSERT INTO tracks (path, format, mtime, date_added) VALUES ('a', 'FLAC', 5, 0), ('b', 'MP3', 5, 0);",
+        )
+        .unwrap();
+        migrate(&conn).unwrap();
+        let mtimes: Vec<i64> = conn
+            .prepare("SELECT mtime FROM tracks ORDER BY path")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(mtimes, [0, 5]);
+        assert_eq!(all_tracks(&conn).unwrap()[0].bit_depth, None);
     }
 }
 
