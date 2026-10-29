@@ -8,10 +8,12 @@ A fast, library-focused desktop music player for macOS and Windows, built with [
 
 ## Download
 
-The first alpha is on the [Releases page](https://github.com/n1ji/honeycomb/releases):
+Alpha builds are on the [Releases page](https://github.com/n1ji/honeycomb/releases):
 
-- **macOS:** `Honeycomb_0.1.0_universal.dmg` (Apple Silicon and Intel)
-- **Windows:** `Honeycomb_0.1.0_x64-setup.exe`, or `Honeycomb_0.1.0_x64_en-US.msi`
+- **macOS:** `Honeycomb_<version>_universal.dmg` (Apple Silicon and Intel)
+- **Windows:** `Honeycomb_<version>_x64-setup.exe`, or `Honeycomb_<version>_x64_en-US.msi`
+
+Honeycomb is only ever published here and on [honeycomb.n1ji.dev](https://honeycomb.n1ji.dev). If you find it offered anywhere else, it isn't from me, so don't install it. Each release also lists SHA-256 checksums (`SHA256SUMS.txt`) to check your download against.
 
 Linux builds will come with a later release.
 
