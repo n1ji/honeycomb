@@ -5,12 +5,24 @@ Building it isn't enough.
 
 ## 1. Cut the release
 
+Work happens on `dev`; `main` always matches the newest release, so anyone
+building from source gets what was released. To release, bring `dev` into
+`main` first:
+
 ```bash
+git switch main
+git merge --ff-only dev
 scripts/release.sh 0.1.1
 ```
 
 This bumps the version everywhere, turns CHANGELOG.md's **Unreleased** section
-into the version's notes, commits and tags. Nothing is pushed yet.
+into the version's notes, commits and tags. Nothing is pushed yet. After
+publishing (step 4), carry the release commit back to `dev`:
+
+```bash
+git switch dev
+git merge --ff-only main
+```
 
 ## 2. Self-test each build
 
