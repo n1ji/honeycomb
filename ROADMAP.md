@@ -81,6 +81,7 @@ This is a plan, not a promise. Each month has a "done when" line. Whatever slips
 - A signed and notarized Mac build (needs the Apple account), and Linux packages on Flathub and/or the AUR.
 - Windows builds kept working, even though it isn't the main target.
 - A user guide covering migration, sync and Last.fm setup.
+- Launch on Product Hunt with 1.0 (not before: the first launch gets the most attention). Prepare the gallery, the demo video, a maker's first comment, and early users who'll be around on launch day. Update the AlternativeTo listing and post to r/MacApps at the same time.
 
 **Done when:** a 1.0 beta is announced to Mac and Linux music library users.
 
