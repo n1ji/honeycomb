@@ -1,4 +1,4 @@
-import { artistOf, Filters, store, View } from "../store";
+import { artistOf, Filters, GroupFilter, store, View } from "../store";
 import { $, h } from "../util";
 import { addToPlaylist, clearInbox, importPlaylist, newPlaylist, openPlaylistMenu, run } from "./actions";
 import { onSidebarItems, sidebarItems } from "../plugins";
@@ -94,12 +94,12 @@ export function mountSidebar() {
     const inboxCount = [...store.tracks.values()].filter((t) => t.inbox).length;
     libBlock.replaceChildren(
       h("div", { class: "nav-head" }, h("span", {}, "Library")),
-      item("Music", { kind: "library" }, "♫", (el) => el.append(h("span", { class: "badge" }, store.tracks.size.toLocaleString()))),
+      item("Music", { kind: "library" }, "♫", (el) => el.append(h("span", { class: "badge" }, store.libraryCount().toLocaleString()))),
       item("Inbox", { kind: "inbox" }, "✉", (el) => {
         if (inboxCount) el.append(h("span", { class: "badge new" }, inboxCount.toLocaleString()));
         el.addEventListener("contextmenu", (e) => {
           e.preventDefault();
-          openMenu(e.clientX, e.clientY, [{ label: "Clear Inbox", disabled: !inboxCount, action: () => run(() => clearInbox()) }]);
+          openMenu(e.clientX, e.clientY, [{ label: "Add all to Library", disabled: !inboxCount, action: () => run(() => clearInbox()) }]);
         });
       }),
       item("Next Up", { kind: "queue" }, "▶", (el) => {
@@ -156,10 +156,11 @@ export function mountSidebar() {
 
   /** Artists, albums or genres, each a shortcut to the library filtered to it. */
   const renderGroups = (m: Exclude<ListMode, "playlists">) => {
-    const groups = new Map<string, { label: string; sub: string; filters: Partial<Filters>; count: number }>();
+    const groups = new Map<string, { label: string; sub: string; filters: GroupFilter; count: number }>();
     for (const t of store.tracks.values()) {
+      if (t.inbox) continue;
       const artist = artistOf(t);
-      const [key, label, sub, filters]: [string, string, string, Partial<Filters>] =
+      const [key, label, sub, filters]: [string, string, string, GroupFilter] =
         m === "artists"
           ? [artist, artist || "Unknown artist", "", { artist }]
           : m === "albums"
@@ -188,7 +189,7 @@ export function mountSidebar() {
     );
     markActive();
   };
-  const groupFilters = new WeakMap<HTMLElement, Partial<Filters>>();
+  const groupFilters = new WeakMap<HTMLElement, GroupFilter>();
 
   /** Highlight the artist/album/genre the library is filtered to. */
   const markActive = () => {
@@ -197,8 +198,10 @@ export function mountSidebar() {
     for (const el of listBlock.querySelectorAll<HTMLElement>(".group-item")) {
       const g = groupFilters.get(el);
       const match =
-        on && !!g && (Object.keys(g) as (keyof Filters)[]).every((k) => f[k] === g[k]) &&
-        (Object.keys(f) as (keyof Filters)[]).every((k) => f[k] === null || g[k] === f[k]);
+        on && !!g && (Object.keys(f) as (keyof Filters)[]).every((k) => {
+          const picked = f[k];
+          return picked === null ? g[k] === undefined : picked.length === 1 && picked[0] === g[k];
+        });
       el.classList.toggle("active", match);
     }
   };

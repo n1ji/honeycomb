@@ -64,11 +64,13 @@ pub(crate) fn scan(db_path: &Path, progress: &dyn Fn(Progress)) -> Result<Finish
     let folders = db::folders(&conn)?;
     let established: Vec<PathBuf> = db::scanned_folders(&conn)?.into_iter().map(PathBuf::from).collect();
 
+    let ignored: HashSet<String> = db::ignored(&conn)?.into_iter().map(|(p, _)| p).collect();
     let files: Vec<PathBuf> = folders
         .iter()
         .flat_map(|f| WalkDir::new(f).follow_links(true).into_iter().filter_map(|e| e.ok()))
         .filter(|e| e.file_type().is_file() && meta::is_audio(e.path()))
         .map(|e| e.into_path())
+        .filter(|p| !ignored.contains(p.to_string_lossy().as_ref()))
         .collect();
 
     let known: HashMap<String, i64> = {
@@ -365,6 +367,44 @@ mod tests {
             (7, true, 1, Some(1_700_000_000), old.date_added, false)
         );
         assert_eq!(db::manual_playlist_track_ids(&conn, pl).unwrap(), [id]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn ignored_inbox_files_stay_out_until_unignored() {
+        let root = std::env::temp_dir().join(format!("hc-ignore-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let music = root.join("music");
+        std::fs::create_dir_all(&music).unwrap();
+        write_wav(&music.join("kept.wav"));
+        let db_path = root.join("library.db");
+        let mut conn = db::open(&db_path).unwrap();
+        db::migrate(&conn).unwrap();
+        conn.execute("INSERT INTO folders (path) VALUES (?1)", [music.to_string_lossy()]).unwrap();
+        let quiet = |_: Progress| {};
+        scan(&db_path, &quiet).unwrap();
+        let junk = music.join("junk.wav");
+        write_wav(&junk);
+        scan(&db_path, &quiet).unwrap();
+        let kept = db::track_id_by_path(&conn, &music.join("kept.wav").to_string_lossy()).unwrap().unwrap();
+        let junk_id = db::track_id_by_path(&conn, &junk.to_string_lossy()).unwrap().unwrap();
+
+        // Only Inbox tracks can be ignored; a library track is left alone.
+        let removed = db::ignore_inbox_tracks(&mut conn, &[kept, junk_id]).unwrap();
+        assert_eq!(removed, [junk_id]);
+        assert_eq!(db::all_tracks(&conn).unwrap().len(), 1);
+        assert_eq!(db::ignored(&conn).unwrap().len(), 1);
+
+        // Rescans skip the ignored file even though it's still on disk.
+        let f = scan(&db_path, &quiet).unwrap();
+        assert_eq!((f.added_or_updated, f.inboxed, f.removed), (0, 0, 0));
+        assert!(db::track_id_by_path(&conn, &junk.to_string_lossy()).unwrap().is_none());
+
+        // Un-ignored, it comes back into the Inbox on the next scan.
+        db::unignore(&mut conn, &[junk.to_string_lossy().into_owned()]).unwrap();
+        let f = scan(&db_path, &quiet).unwrap();
+        assert_eq!((f.added_or_updated, f.inboxed), (1, 1));
+        assert_eq!(inbox_names(&conn), ["junk.wav"]);
         let _ = std::fs::remove_dir_all(&root);
     }
 }

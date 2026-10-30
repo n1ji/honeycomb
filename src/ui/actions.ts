@@ -16,8 +16,12 @@ export async function run(fn: () => Promise<unknown>) {
   }
 }
 
-export function openTrackMenu(x: number, y: number) {
-  const ids = store.selectedIds();
+/**
+ * The menu for the selected tracks, or for `group` (every track of an artist,
+ * album or genre in the column browser), which works on all of them at once.
+ */
+export function openTrackMenu(x: number, y: number, group?: number[]) {
+  const ids = group ?? store.selectedIds();
   if (!ids.length) return;
   const manual = store.playlists.filter((p) => p.kind === "manual");
   const view = store.view;
@@ -43,30 +47,56 @@ export function openTrackMenu(x: number, y: number) {
         action: () => run(() => setRating(ids, r)),
       })),
     },
-    { label: ids.length > 1 ? `Edit tags (${ids.length} tracks)…` : "Edit tags…", action: () => openTagEditor(store.selectedTracks()) },
+    { label: ids.length > 1 ? `Edit tags (${ids.length} tracks)…` : "Edit tags…", action: () => openTagEditor(ids.map((id) => store.tracks.get(id)!)) },
     {
       label: "Show in folder",
       disabled: ids.length !== 1,
       action: () => run(() => revealItemInDir(store.tracks.get(ids[0])!.path)),
     },
   ];
-  if (view.kind === "inbox" || ids.some((id) => store.tracks.get(id)?.inbox)) {
-    items.push(SEP, { label: "Remove from Inbox", action: () => run(() => clearInbox(ids)) });
+  const inbox = ids.filter((id) => store.tracks.get(id)?.inbox);
+  if (inbox.length) {
+    items.push(
+      SEP,
+      { label: "Add to Library", action: () => run(() => clearInbox(inbox)) },
+      { label: "Remove and ignore…", action: () => run(() => ignoreInboxTracks(inbox)) },
+    );
   }
-  if (view.kind === "queue") {
+  // Removing works on selected rows, so it's left out of group menus.
+  if (!group && view.kind === "queue") {
     items.push(SEP, { label: "Remove from queue", action: () => removeSelected() });
-  } else if (pl?.kind === "manual") {
+  } else if (!group && pl?.kind === "manual") {
     items.push(SEP, { label: "Remove from playlist", action: () => removeSelected() });
   }
   openMenu(x, y, items);
 }
 
-/** Mark tracks as reviewed (all inbox tracks when `ids` is null). */
+/** Add Inbox tracks to the library (all of them when `ids` is null). */
 export async function clearInbox(ids: number[] | null = null) {
   await api.clearInbox(ids);
-  const done = ids ?? [...store.tracks.values()].filter((t) => t.inbox).map((t) => t.id);
+  await markAccepted(ids ?? [...store.tracks.values()].filter((t) => t.inbox).map((t) => t.id));
+}
+
+/** Reflect tracks leaving the Inbox (the backend has already been told). */
+async function markAccepted(ids: number[]) {
+  const done = ids.filter((id) => store.tracks.get(id)?.inbox);
+  if (!done.length) return;
   store.updateTracks(done.map((id) => ({ ...store.tracks.get(id)!, inbox: false })));
-  if (store.view.kind === "inbox") await store.refreshView("keepScroll");
+  if (store.view.kind === "inbox" || store.view.kind === "library") await store.refreshView("keepScroll");
+}
+
+/** Take Inbox tracks out of Honeycomb for good: the files stay, and scans skip them. */
+export async function ignoreInboxTracks(ids: number[]) {
+  const n = ids.length;
+  const what = n === 1 ? "this track" : `these ${n} tracks`;
+  const ok = await ask(
+    `Remove ${what} from Honeycomb? The files stay on disk, and rescans will skip them. You can bring them back in Settings → Library → Ignored files.`,
+    { title: "Remove and ignore", kind: "warning" },
+  );
+  if (!ok) return;
+  const removed = await api.ignoreInboxTracks(ids);
+  await store.removeTracks(removed);
+  toast(`Removed ${removed.length} track${removed.length === 1 ? "" : "s"}; rescans will skip ${removed.length === 1 ? "it" : "them"}`);
 }
 
 async function setRating(ids: number[], rating: number) {
@@ -96,6 +126,7 @@ export function removeSelected() {
 export async function addToPlaylist(p: Playlist, ids: number[]) {
   await api.addToPlaylist(p.id, ids);
   toast(`Added ${ids.length} track${ids.length === 1 ? "" : "s"} to ${p.name}`);
+  await markAccepted(ids);
   if (store.currentPlaylist?.id === p.id) await store.refreshView();
 }
 
@@ -103,6 +134,7 @@ export async function newPlaylist(ids: number[] = []) {
   const name = await promptText("New playlist", "Name", "New playlist");
   if (!name) return;
   const p = await api.createPlaylist(name, null, ids);
+  await markAccepted(ids);
   await store.loadPlaylists();
   if (!ids.length) await store.setView({ kind: "playlist", id: p.id });
   else toast(`Created ${name} with ${ids.length} track${ids.length === 1 ? "" : "s"}`);

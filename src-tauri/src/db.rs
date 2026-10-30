@@ -66,7 +66,9 @@ pub fn migrate(conn: &Connection) -> Result<()> {
             body TEXT,
             instrumental INTEGER NOT NULL DEFAULT 0,
             fetched INTEGER NOT NULL
-        );",
+        );
+        -- Files removed from the Inbox that scans skip until un-ignored.
+        CREATE TABLE IF NOT EXISTS ignored (path TEXT PRIMARY KEY, ignored_at INTEGER NOT NULL);",
     )?;
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
     if version < 1 {
@@ -274,6 +276,51 @@ pub fn set_playlist_track_ids(conn: &mut Connection, id: i64, ids: &[i64]) -> Re
         for (pos, tid) in ids.iter().enumerate() {
             stmt.execute(params![id, tid, pos as i64])?;
         }
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+/// Take tracks out of the Inbox and into the library.
+pub fn accept_tracks(conn: &Connection, ids: &[i64]) -> Result<()> {
+    for id in ids {
+        conn.execute("UPDATE tracks SET inbox = 0 WHERE id = ?1", [id])?;
+    }
+    Ok(())
+}
+
+/// Remove Inbox tracks from the library and have scans skip their files.
+/// Tracks already in the library are left alone. Returns the removed ids.
+pub fn ignore_inbox_tracks(conn: &mut Connection, ids: &[i64]) -> Result<Vec<i64>> {
+    let tx = conn.transaction()?;
+    let mut removed = Vec::new();
+    for &id in ids {
+        let path: Option<String> = tx
+            .query_row("SELECT path FROM tracks WHERE id = ?1 AND inbox = 1", [id], |r| r.get(0))
+            .optional()?;
+        let Some(path) = path else { continue };
+        tx.execute(
+            "INSERT OR REPLACE INTO ignored (path, ignored_at) VALUES (?1, ?2)",
+            params![path, crate::models::now_secs()],
+        )?;
+        tx.execute("DELETE FROM tracks WHERE id = ?1", [id])?;
+        removed.push(id);
+    }
+    tx.commit()?;
+    Ok(removed)
+}
+
+/// Ignored files, newest first: (path, when it was ignored).
+pub fn ignored(conn: &Connection) -> Result<Vec<(String, i64)>> {
+    let mut stmt = conn.prepare("SELECT path, ignored_at FROM ignored ORDER BY ignored_at DESC, path")?;
+    let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+pub fn unignore(conn: &mut Connection, paths: &[String]) -> Result<()> {
+    let tx = conn.transaction()?;
+    for p in paths {
+        tx.execute("DELETE FROM ignored WHERE path = ?1", [p])?;
     }
     tx.commit()?;
     Ok(())

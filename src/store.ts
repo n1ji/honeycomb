@@ -6,11 +6,15 @@ export type SortKey = keyof Track;
 
 type Keep = "reset" | "keepScroll" | "keepAll";
 
+/** The column browser's picks: one or more values per pane, or null for all. */
 export interface Filters {
-  genre: string | null;
-  artist: string | null;
-  album: string | null;
+  genre: string[] | null;
+  artist: string[] | null;
+  album: string[] | null;
 }
+
+/** One value per pane, as the sidebar's artist/album/genre shortcuts use. */
+export type GroupFilter = Partial<Record<keyof Filters, string>>;
 
 type Topic = "tracks" | "view" | "visible" | "selection" | "playlists" | "queue" | "tick" | "signal" | "settings";
 
@@ -80,6 +84,20 @@ class Store {
     this.recompute("keepAll");
   }
 
+  async removeTracks(ids: number[]) {
+    for (const id of ids) this.tracks.delete(id);
+    this.tracksVersion++;
+    this.emit("tracks");
+    await this.refreshView("keepScroll");
+  }
+
+  /** Tracks in the library, not counting the Inbox. */
+  libraryCount(): number {
+    let n = 0;
+    for (const t of this.tracks.values()) if (!t.inbox) n++;
+    return n;
+  }
+
   // ---------- view ----------
 
   async setView(view: View) {
@@ -95,7 +113,8 @@ class Store {
   async refreshView(mode: Keep = "reset") {
     const v = this.view;
     if (v.kind === "library") {
-      this.viewIds = this.sortCache().libraryIds;
+      // Inbox tracks join the library once they're added.
+      this.viewIds = this.sortCache().libraryIds.filter((id) => !this.tracks.get(id)!.inbox);
     } else if (v.kind === "inbox") {
       // Newest first.
       const pos = this.sortCache().pos;
@@ -134,9 +153,18 @@ class Store {
   recompute(mode: Keep = "reset") {
     let rows = this.baseRows();
     const f = this.filters;
-    if (f.genre !== null) rows = rows.filter((r) => r.t.genre === f.genre);
-    if (f.artist !== null) rows = rows.filter((r) => artistOf(r.t) === f.artist);
-    if (f.album !== null) rows = rows.filter((r) => r.t.album === f.album);
+    if (f.genre) {
+      const s = new Set(f.genre);
+      rows = rows.filter((r) => s.has(r.t.genre));
+    }
+    if (f.artist) {
+      const s = new Set(f.artist);
+      rows = rows.filter((r) => s.has(artistOf(r.t)));
+    }
+    if (f.album) {
+      const s = new Set(f.album);
+      rows = rows.filter((r) => s.has(r.t.album));
+    }
 
     const q = this.search.trim().toLowerCase();
     if (q) {
@@ -171,14 +199,15 @@ class Store {
   }
 
   /** Show the library narrowed to an artist, album or genre (from the sidebar). */
-  async showFiltered(filters: Partial<Filters>) {
+  async showFiltered(filters: GroupFilter) {
     if (this.view.kind !== "library") await this.setView({ kind: "library" });
-    this.filters = { genre: null, artist: null, album: null, ...filters };
+    const one = (v: string | undefined) => (v === undefined ? null : [v]);
+    this.filters = { genre: one(filters.genre), artist: one(filters.artist), album: one(filters.album) };
     this.recompute();
   }
 
-  setFilter(key: keyof Filters, value: string | null) {
-    this.filters[key] = value;
+  setFilter(key: keyof Filters, values: string[] | null) {
+    this.filters[key] = values?.length ? values : null;
     // Narrowing an outer pane resets the panes to its right.
     if (key === "genre") this.filters.artist = this.filters.album = null;
     if (key === "artist") this.filters.album = null;

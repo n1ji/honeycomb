@@ -1582,6 +1582,58 @@ textarea.input {
   white-space: nowrap;
 }
 
+.ignored-list {
+  max-height: 50vh;
+  overflow-y: auto;
+  margin-top: 8px;
+}
+
+/* Room for the scrollbar, which overlays the rows on macOS. */
+.ignored-list li {
+  padding-right: 18px;
+}
+
+.ignored-row,
+.ignored-all {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ignored-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ignored-row span.muted {
+  flex: 1;
+}
+
+.ignored-all {
+  flex-shrink: 0;
+}
+
+/* Shown while hovering a row. */
+.ignored-copy {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  font-size: 0.85em;
+  visibility: hidden;
+}
+
+.ignored-list li:hover .ignored-copy {
+  visibility: visible;
+}
+
+/* The date never truncates; the folder path gives way instead. */
+.folders li span.ignored-date {
+  flex-shrink: 0;
+  overflow: visible;
+  font-size: 0.9em;
+}
+
 .swatches {
   display: flex;
   gap: 6px;

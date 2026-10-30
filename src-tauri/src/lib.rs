@@ -110,17 +110,45 @@ fn set_rating(state: State<AppState>, ids: Vec<i64>, rating: u8) -> CmdResult<()
     Ok(())
 }
 
-/// Take tracks out of the inbox (all of them when `ids` is None).
+/// Add Inbox tracks to the library (all of them when `ids` is None).
 #[tauri::command]
 fn clear_inbox(state: State<AppState>, ids: Option<Vec<i64>>) -> CmdResult<()> {
     let conn = state.conn();
     match ids {
-        None => conn.execute("UPDATE tracks SET inbox = 0 WHERE inbox = 1", []).map(|_| ()),
-        Some(ids) => ids
-            .iter()
-            .try_for_each(|id| conn.execute("UPDATE tracks SET inbox = 0 WHERE id = ?1", [id]).map(|_| ())),
+        None => conn.execute("UPDATE tracks SET inbox = 0 WHERE inbox = 1", []).map(|_| ()).map_err(err),
+        Some(ids) => db::accept_tracks(&conn, &ids).map_err(err),
     }
-    .map_err(err)
+}
+
+/// Take Inbox tracks out of Honeycomb (the files stay on disk) and skip them
+/// on later scans. Returns the ids that were removed.
+#[tauri::command]
+fn ignore_inbox_tracks(state: State<AppState>, ids: Vec<i64>) -> CmdResult<Vec<i64>> {
+    db::ignore_inbox_tracks(&mut state.conn(), &ids).map_err(err)
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct IgnoredFile {
+    path: String,
+    ignored_at: i64,
+}
+
+#[tauri::command]
+fn ignored_files(state: State<AppState>) -> CmdResult<Vec<IgnoredFile>> {
+    Ok(db::ignored(&state.conn())
+        .map_err(err)?
+        .into_iter()
+        .map(|(path, ignored_at)| IgnoredFile { path, ignored_at })
+        .collect())
+}
+
+/// Stop ignoring files, then rescan so they come back (into the Inbox).
+#[tauri::command]
+fn unignore_files(app: AppHandle, state: State<AppState>, paths: Vec<String>) -> CmdResult<()> {
+    db::unignore(&mut state.conn(), &paths).map_err(err)?;
+    scanner::spawn_scan(app, state.db_path.clone(), state.scanning.clone());
+    Ok(())
 }
 
 #[tauri::command]
@@ -187,6 +215,7 @@ fn create_playlist(
     .map_err(err)?;
     let id = conn.last_insert_rowid();
     if let Some(ids) = track_ids {
+        db::accept_tracks(&conn, &ids).map_err(err)?;
         db::set_playlist_track_ids(&mut conn, id, &ids).map_err(err)?;
     }
     Ok(Playlist { id, name, kind: kind.into(), rules })
@@ -243,6 +272,8 @@ fn set_playlist_tracks(state: State<AppState>, id: i64, track_ids: Vec<i64>) -> 
 fn add_to_playlist(state: State<AppState>, id: i64, track_ids: Vec<i64>) -> CmdResult<()> {
     let mut conn = state.conn();
     let mut ids = db::manual_playlist_track_ids(&conn, id).map_err(err)?;
+    // Putting a track on a playlist adds it to the library.
+    db::accept_tracks(&conn, &track_ids).map_err(err)?;
     ids.extend(track_ids);
     db::set_playlist_track_ids(&mut conn, id, &ids).map_err(err)
 }
@@ -701,6 +732,9 @@ pub fn run() {
             rescan,
             set_rating,
             clear_inbox,
+            ignore_inbox_tracks,
+            ignored_files,
+            unignore_files,
             edit_tags,
             get_settings,
             set_setting,

@@ -115,7 +115,8 @@ pub fn evaluate(conn: &Connection, rules: &SmartRules) -> Result<Vec<i64>> {
     };
     let limit = rules.limit.map(|l| format!(" LIMIT {l}")).unwrap_or_default();
 
-    let sql = format!("SELECT id FROM tracks WHERE {where_sql} ORDER BY {order}{limit}");
+    // Inbox tracks haven't been added to the library yet.
+    let sql = format!("SELECT id FROM tracks WHERE inbox = 0 AND ({where_sql}) ORDER BY {order}{limit}");
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(rusqlite::params_from_iter(params), |r| r.get(0))?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -179,6 +180,13 @@ mod tests {
         assert_eq!(titles(&conn, &all), ["a"]);
         let any = rules("any", &[("genre", "is", "jazz"), ("year", "gt", "2022")]);
         assert_eq!(titles(&conn, &any), ["c", "d"]);
+    }
+
+    #[test]
+    fn inbox_tracks_are_left_out() {
+        let conn = lib();
+        conn.execute("UPDATE tracks SET inbox = 1 WHERE path = 'c'", []).unwrap();
+        assert_eq!(titles(&conn, &rules("all", &[])), ["a", "b", "d"]);
     }
 
     #[test]

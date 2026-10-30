@@ -1,7 +1,7 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { api } from "../api";
 import { store } from "../store";
-import { h } from "../util";
+import { fmtDate, h, toast } from "../util";
 import { run } from "./actions";
 import { button, modal } from "./dialogs";
 import { openColumnsCustomizer, openPlayerBarCustomizer, setLayoutSetting } from "./customize";
@@ -139,6 +139,82 @@ function layoutSection(m: { close: () => void }): HTMLElement[] {
   ];
 }
 
+/**
+ * Files removed from the Inbox. Checking rows (Shift-click for a range, or
+ * "Select all" for everything the filter shows) and "Stop ignoring" brings
+ * them back into the Inbox with a rescan.
+ */
+async function openIgnored() {
+  const files = await api.ignoredFiles();
+  const m = modal("Ignored files", { wide: true });
+  const picked = new Set<string>();
+  let shown = files;
+  let last = -1;
+  const filter = h("input", { type: "search", class: "input", placeholder: "Filter by name or folder" });
+  const all = h("input", { type: "checkbox" });
+  const list = h("ul", { class: "folders ignored-list" });
+  const unignore = button("Stop ignoring", () =>
+    run(async () => {
+      await api.unignoreFiles([...picked]);
+      m.close();
+    }),
+    true,
+  );
+  const render = () => {
+    const q = filter.value.trim().toLowerCase();
+    shown = q ? files.filter((f) => f.path.toLowerCase().includes(q)) : files;
+    all.checked = shown.length > 0 && shown.every((f) => picked.has(f.path));
+    unignore.disabled = picked.size === 0;
+    unignore.textContent = picked.size ? `Stop ignoring ${picked.size.toLocaleString()}` : "Stop ignoring";
+    list.replaceChildren(
+      ...(shown.length
+        ? shown.map((f, i) => {
+            const box = h("input", { type: "checkbox" });
+            box.checked = picked.has(f.path);
+            box.addEventListener("click", (e) => {
+              // Shift-click sets every row between the last click and this one.
+              const range = e.shiftKey && last >= 0 ? shown.slice(Math.min(last, i), Math.max(last, i) + 1) : [f];
+              for (const r of range) box.checked ? picked.add(r.path) : picked.delete(r.path);
+              last = i;
+              render();
+            });
+            // The file name, and only the folder it sits in; hover for the full path.
+            const parts = f.path.split(/[\\/]/);
+            const copy = h("button", { class: "btn ignored-copy", type: "button", title: "Copy the full path" }, "Copy path");
+            copy.addEventListener("click", () =>
+              run(async () => {
+                await navigator.clipboard.writeText(f.path);
+                toast("Path copied");
+              }),
+            );
+            return h(
+              "li",
+              { title: f.path },
+              h("label", { class: "ignored-row" }, box, h("span", {}, parts[parts.length - 1] || f.path), h("span", { class: "muted" }, parts[parts.length - 2] ?? "")),
+              copy,
+              h("span", { class: "muted ignored-date" }, fmtDate(f.ignoredAt)),
+            );
+          })
+        : [h("li", { class: "muted" }, files.length ? "No ignored files match." : "No ignored files.")]),
+    );
+  };
+  filter.addEventListener("input", () => {
+    last = -1;
+    render();
+  });
+  all.addEventListener("change", () => {
+    for (const f of shown) all.checked ? picked.add(f.path) : picked.delete(f.path);
+    render();
+  });
+  m.body.append(
+    h("p", { class: "muted" }, "Files you removed from the Inbox. Honeycomb skips them when scanning; the files themselves were never touched. Bring them back and they show up in the Inbox again."),
+    h("div", { class: "row" }, filter, h("label", { class: "ignored-all" }, all, h("span", {}, "Select all"))),
+    list,
+  );
+  m.footer.append(button("Close", () => m.close()), unignore);
+  render();
+}
+
 export async function openSettings() {
   const m = modal("Settings", { wide: true });
 
@@ -255,12 +331,13 @@ export async function openSettings() {
       { class: "row" },
       button("Add folder…", addFolder, true),
       button("Rescan now", () => run(api.rescan)),
+      button("Ignored files…", () => run(openIgnored)),
       button("Import from another player…", () => {
         m.close();
         openImporter();
       }),
     ),
-    h("p", { class: "muted" }, `${store.tracks.size.toLocaleString()} tracks in library. Honeycomb never moves or deletes your files.`),
+    h("p", { class: "muted" }, `${store.libraryCount().toLocaleString()} tracks in library. Honeycomb never moves or deletes your files.`),
     h("h3", {}, "Lyrics"),
     lyricsToggle(),
     h(

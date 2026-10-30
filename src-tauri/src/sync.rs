@@ -328,7 +328,12 @@ pub fn selection(conn: &Connection, p: &Profile, resolve: &dyn Fn(i64) -> Result
         }
         lists.push((pl.name.clone(), tids));
     }
-    let tracks = db::tracks_by_ids(conn, &ids)?;
+    // Inbox tracks haven't been added to the library yet, so they stay off devices.
+    let tracks: Vec<Track> = db::tracks_by_ids(conn, &ids)?.into_iter().filter(|t| !t.inbox).collect();
+    let kept: HashSet<i64> = tracks.iter().map(|t| t.id).collect();
+    for (_, tids) in &mut lists {
+        tids.retain(|t| kept.contains(t));
+    }
     Ok((tracks, lists))
 }
 
@@ -722,6 +727,20 @@ mod tests {
         assert!(!stick.join("Road_ Trip.m3u8").exists());
         assert!(stick.join("Artist/Album/03 Three.mp3").exists());
         assert_eq!(fs::read_to_string(stick.join("my notes.txt")).unwrap(), "mine");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn inbox_tracks_stay_off_the_device() {
+        let (root, mut conn, ids) = setup("inbox");
+        let stick = root.join("stick");
+        conn.execute("UPDATE tracks SET inbox = 1 WHERE id = ?1", [ids[1]]).unwrap();
+        let mix = playlist(&mut conn, "Mix", &ids);
+        let p = Profile { dest: stick.to_string_lossy().into(), whole_library: true, playlists: vec![mix], remove_unselected: true, convert: None };
+        let r = sync(&conn, &p);
+        assert_eq!(r.copied, 2, "{r:?}");
+        assert!(!stick.join("Artist/Album/02 Two.mp3").exists());
+        assert!(!fs::read_to_string(stick.join("Mix.m3u8")).unwrap().contains("Two"));
         let _ = fs::remove_dir_all(&root);
     }
 

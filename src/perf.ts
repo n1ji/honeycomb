@@ -51,7 +51,7 @@ export async function runBenchmark(mainStart: number, loaded: number) {
   await timed("sort by title (desc)", () => store.setSort("title"));
   await timed("sort off", () => store.setSort("title"));
   const artist = store.visible[Math.floor(store.visible.length / 2)]?.artist ?? null;
-  await timed("filter one artist", () => store.setFilter("artist", artist));
+  await timed("filter one artist", () => store.setFilter("artist", artist === null ? null : [artist]));
   await timed("clear filter", () => store.setFilter("artist", null));
 
   // Scroll ten rows per frame and record frame times.

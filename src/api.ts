@@ -31,6 +31,13 @@ export interface Track {
   bitDepth: number | null;
 }
 
+/** A file removed from the Inbox that scans skip. */
+export interface IgnoredFile {
+  path: string;
+  /** Unix seconds. */
+  ignoredAt: number;
+}
+
 export interface SmartRule {
   field: string;
   op: string;
@@ -199,8 +206,13 @@ export const api = {
   removeFolder: (path: string) => invoke<void>("remove_folder", { path }),
   rescan: () => invoke<void>("rescan"),
   setRating: (ids: number[], rating: number) => invoke<void>("set_rating", { ids, rating }),
-  /** Take tracks out of the inbox; all of them when `ids` is null. */
+  /** Add Inbox tracks to the library; all of them when `ids` is null. */
   clearInbox: (ids: number[] | null = null) => invoke<void>("clear_inbox", { ids }),
+  /** Remove Inbox tracks (files stay on disk) and skip them on later scans. Returns the removed ids. */
+  ignoreInboxTracks: (ids: number[]) => invoke<number[]>("ignore_inbox_tracks", { ids }),
+  ignoredFiles: () => invoke<IgnoredFile[]>("ignored_files"),
+  /** Stop ignoring files; a rescan brings them back into the Inbox. */
+  unignoreFiles: (paths: string[]) => invoke<void>("unignore_files", { paths }),
   editTags: (ids: number[], edit: TagEdit) => invoke<Track[]>("edit_tags", { ids, edit }),
 
   getSettings: () => invoke<Record<string, string>>("get_settings"),
