@@ -12,6 +12,10 @@
 //! manifest is saved as it goes, so a cancelled or unplugged sync leaves no
 //! half-written tracks behind and the next sync carries on.
 //!
+//! Lossless files can be converted on the way (MP3, AAC, Ogg Vorbis or 16-bit
+//! FLAC, see `convert`); the manifest records what each file was converted
+//! to, so changing the choice converts again. Conversions run in parallel.
+//!
 //! Rockbox players keep a log of what they played (`.rockbox/playback.log`,
 //! with logging turned on in the player's settings). Before copying, plays of
 //! synced files are read from it and added to the library's play counts.
@@ -27,6 +31,7 @@ use anyhow::{Context, Result, bail};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
+use crate::convert::{self, Convert};
 use crate::db;
 use crate::models::Track;
 
@@ -47,6 +52,9 @@ pub struct Profile {
     pub playlists: Vec<i64>,
     /// Remove synced files that are no longer chosen.
     pub remove_unselected: bool,
+    /// Convert lossless files to this; None copies everything as it is.
+    #[serde(default)]
+    pub convert: Option<Convert>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -56,6 +64,12 @@ struct Entry {
     /// Source size and modification time when it was copied.
     size: u64,
     mtime: i64,
+    /// What it was converted to (`Convert::key`); empty when copied as is.
+    #[serde(default)]
+    conv: String,
+    /// Size of the file written, when it differs from the source's.
+    #[serde(default)]
+    out_size: Option<u64>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -127,9 +141,13 @@ pub fn safe_name(s: &str, fallback: &str) -> String {
 }
 
 /// Where a track goes on the device, relative to the destination, with `/`.
-pub fn track_path(t: &Track) -> String {
+/// `ext` replaces the file's own extension when it's converted.
+pub fn track_path(t: &Track, ext: Option<&str>) -> String {
     let src = Path::new(&t.path);
-    let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    let ext = match ext {
+        Some(e) => e.to_string(),
+        None => src.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase(),
+    };
     let stem = src.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
     let artist = if t.album_artist.is_empty() { &t.artist } else { &t.album_artist };
     let artist = safe_name(artist, "Unknown Artist");
@@ -148,13 +166,19 @@ pub fn track_path(t: &Track) -> String {
     format!("{artist}/{album}/{file}.{ext}")
 }
 
+/// What a track is converted to, if anything.
+fn conversion(p: &Profile, t: &Track) -> Option<Convert> {
+    p.convert.filter(|c| c.applies(t.bit_depth, t.sample_rate))
+}
+
 /// Give each track its own path; FAT compares names without case.
-fn assign_paths(tracks: &[Track]) -> Vec<String> {
+fn assign_paths(tracks: &[Track], convs: &[Option<Convert>]) -> Vec<String> {
     let mut used: HashSet<String> = HashSet::new();
     tracks
         .iter()
-        .map(|t| {
-            let base = track_path(t);
+        .zip(convs)
+        .map(|(t, c)| {
+            let base = track_path(t, c.map(|c| c.ext()));
             let mut p = base.clone();
             let mut n = 2;
             while !used.insert(p.to_lowercase()) {
@@ -336,6 +360,42 @@ fn copy_file(src: &Path, dst: &Path, cancel: &AtomicBool) -> Result<u64> {
     Ok(total)
 }
 
+/// One file to put on the device.
+struct Job<'a> {
+    track: &'a Track,
+    rel: String,
+    /// The source's size and modification time.
+    size: u64,
+    mtime: i64,
+    conv: Option<Convert>,
+    /// Bytes it's expected to take on the device.
+    estimate: u64,
+}
+
+/// Copy or convert one file into place, through a `.part` file.
+fn write_one(dest: &Path, job: &Job, cancel: &AtomicBool) -> Result<u64> {
+    let target = native(dest, &job.rel);
+    if target.parent().is_some_and(Path::exists) && !inside(dest, &target) {
+        bail!("{} leads outside the destination", target.display());
+    }
+    let Some(conv) = job.conv else { return copy_file(Path::new(&job.track.path), &target, cancel) };
+    if let Some(dir) = target.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    let part = target.with_file_name(format!("{}.part", target.file_name().unwrap_or_default().to_string_lossy()));
+    let _ = fs::remove_file(&part);
+    match convert::convert(Path::new(&job.track.path), &part, conv, cancel) {
+        Ok(bytes) => {
+            fs::rename(&part, &target)?;
+            Ok(bytes)
+        }
+        Err(e) => {
+            let _ = fs::remove_file(&part);
+            Err(e)
+        }
+    }
+}
+
 fn write_playlist(dest: &Path, name: &str, tracks: &[(&Track, &str)]) -> Result<String> {
     let rel = format!("{}.m3u8", safe_name(name, "Playlist"));
     let mut out = String::from("#EXTM3U\n");
@@ -379,12 +439,13 @@ pub fn run(
     }
 
     let (tracks, lists) = selection(conn, p, resolve)?;
-    let paths = assign_paths(&tracks);
+    let convs: Vec<Option<Convert>> = tracks.iter().map(|t| conversion(p, t)).collect();
+    let paths = assign_paths(&tracks, &convs);
     let wanted: HashSet<&str> = paths.iter().map(String::as_str).collect();
 
-    // What needs copying, and what may be removed.
+    // What needs copying or converting, and what may be removed.
     let mut todo = Vec::new();
-    for (t, rel) in tracks.iter().zip(&paths) {
+    for ((t, rel), conv) in tracks.iter().zip(&paths).zip(&convs) {
         let src = fs::metadata(&t.path);
         let (size, mtime) = match &src {
             Ok(md) => (md.len(), crate::meta::file_mtime(Path::new(&t.path))),
@@ -395,28 +456,45 @@ pub fn run(
         };
         let target = native(&dest, rel);
         let have = fs::metadata(&target).ok();
-        let current = m.files.get(rel).is_some_and(|e| e.track_id == t.id && e.size == size && e.mtime == mtime)
-            && have.as_ref().is_some_and(|md| md.len() == size);
+        let key = conv.map(|c| c.key()).unwrap_or_default();
+        let current = m.files.get(rel).is_some_and(|e| {
+            e.track_id == t.id
+                && e.size == size
+                && e.mtime == mtime
+                && e.conv == key
+                && have.as_ref().is_some_and(|md| md.len() == e.out_size.unwrap_or(size))
+        });
         if current {
             report.unchanged += 1;
-        } else if have.is_some() && !m.files.contains_key(rel) && have.as_ref().map(|md| md.len()) != Some(size) {
+        } else if have.is_some()
+            && !m.files.contains_key(rel)
+            && (conv.is_some() || have.as_ref().map(|md| md.len()) != Some(size))
+        {
             // Someone else's file is in the way; never overwrite it.
             report.failed.push(format!("{}: a different file is already there", target.display()));
         } else {
-            todo.push((t, rel.clone(), size, mtime));
+            // Converted files are estimated from their length.
+            let estimate = conv.map_or(size, |c| (t.duration * c.bytes_per_sec() as f64) as u64);
+            todo.push(Job { track: t, rel: rel.clone(), size, mtime, conv: *conv, estimate });
         }
     }
-    let stale: Vec<String> = if p.remove_unselected {
-        m.files.keys().filter(|k| !wanted.contains(k.as_str())).cloned().collect()
-    } else {
-        Vec::new()
-    };
+    // Files a previous sync put there that aren't wanted now: with "remove
+    // unselected", all of them; otherwise only those of tracks that are still
+    // chosen but go to a new path (converted to another format, say), so
+    // there are never two copies of one track.
+    let chosen: HashSet<i64> = tracks.iter().map(|t| t.id).collect();
+    let stale: Vec<String> = m
+        .files
+        .iter()
+        .filter(|(k, e)| !wanted.contains(k.as_str()) && (p.remove_unselected || chosen.contains(&e.track_id)))
+        .map(|(k, _)| k.clone())
+        .collect();
 
     // Enough room? Files being replaced and removed free up their space.
-    let need: u64 = todo.iter().map(|(_, _, size, _)| *size).sum();
+    let need: u64 = todo.iter().map(|j| j.estimate).sum();
     let freed: u64 = todo
         .iter()
-        .map(|(_, rel, _, _)| rel)
+        .map(|j| &j.rel)
         .chain(stale.iter())
         .filter(|rel| m.files.contains_key(*rel))
         .filter_map(|rel| fs::metadata(native(&dest, rel)).ok().map(|md| md.len()))
@@ -450,33 +528,61 @@ pub fn run(
     }
     save_manifest(&dest, &m)?;
 
-    // Copy.
+    // Copy and convert. Converting is slow and uses one core per file, so
+    // those run several at a time; plain copies go one by one, which is
+    // what flash drives and players cope with best.
     let total = todo.len();
-    let mut last_save = Instant::now();
-    for (i, (t, rel, size, mtime)) in todo.iter().enumerate() {
-        progress(Progress { done: i, total, current: rel.clone() });
-        let target = native(&dest, rel);
-        if target.parent().is_some_and(Path::exists) && !inside(&dest, &target) {
-            report.failed.push(format!("{}: leads outside the destination", target.display()));
-            continue;
+    let workers = if todo.iter().any(|j| j.conv.is_some()) {
+        std::thread::available_parallelism().map_or(2, |n| n.get().saturating_sub(1).max(1))
+    } else {
+        1
+    };
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let (tx, rx) = std::sync::mpsc::channel::<(usize, Result<u64>)>();
+    progress(Progress { done: 0, total, current: todo.first().map(|j| j.rel.clone()).unwrap_or_default() });
+    std::thread::scope(|scope| -> Result<()> {
+        for _ in 0..workers.min(total) {
+            let (tx, next, todo, dest) = (tx.clone(), &next, &todo, &dest);
+            scope.spawn(move || {
+                loop {
+                    let i = next.fetch_add(1, Ordering::SeqCst);
+                    let Some(job) = todo.get(i) else { break };
+                    if cancel.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    if tx.send((i, write_one(dest, job, cancel))).is_err() {
+                        break;
+                    }
+                }
+            });
         }
-        match copy_file(Path::new(&t.path), &target, cancel) {
-            Ok(bytes) => {
-                report.copied += 1;
-                report.bytes_copied += bytes;
-                m.files.insert(rel.clone(), Entry { track_id: t.id, size: *size, mtime: *mtime });
+        drop(tx);
+        let mut last_save = Instant::now();
+        for (done, (i, result)) in rx.iter().enumerate() {
+            let job = &todo[i];
+            match result {
+                Ok(bytes) => {
+                    report.copied += 1;
+                    report.bytes_copied += bytes;
+                    let conv = job.conv.map(|c| c.key()).unwrap_or_default();
+                    let out_size = job.conv.map(|_| bytes);
+                    m.files.insert(
+                        job.rel.clone(),
+                        Entry { track_id: job.track.id, size: job.size, mtime: job.mtime, conv, out_size },
+                    );
+                }
+                Err(_) if cancel.load(Ordering::Relaxed) => report.cancelled = true,
+                Err(e) => report.failed.push(format!("{}: {e:#}", job.track.path)),
             }
-            Err(_) if cancel.load(Ordering::Relaxed) => {
-                report.cancelled = true;
-                break;
+            progress(Progress { done: done + 1, total, current: job.rel.clone() });
+            if (done + 1) % SAVE_EVERY == 0 || last_save.elapsed().as_secs() >= 5 {
+                save_manifest(&dest, &m)?;
+                last_save = Instant::now();
             }
-            Err(e) => report.failed.push(format!("{}: {e:#}", t.path)),
         }
-        if (i + 1) % SAVE_EVERY == 0 || last_save.elapsed().as_secs() >= 5 {
-            save_manifest(&dest, &m)?;
-            last_save = Instant::now();
-        }
-    }
+        Ok(())
+    })?;
+    report.cancelled |= cancel.load(Ordering::Relaxed);
     progress(Progress { done: total, total, current: String::new() });
 
     // Playlists, with the files that made it onto the device.
@@ -540,7 +646,7 @@ mod tests {
             t("/a/y.flac", "song", Some(1), Some(1)),
             t("/a/z.mp3", "", None, Some(2)),
         ];
-        let paths = assign_paths(&tracks);
+        let paths = assign_paths(&tracks, &[None, None, None]);
         assert_eq!(paths, ["Band/Album/01 Song.flac", "Band/Album/01 song (2).flac", "Band/Album/2-z.mp3"]);
     }
 
@@ -588,7 +694,7 @@ mod tests {
         let stick = root.join("stick");
         fs::write(stick.join("my notes.txt"), "mine").unwrap();
         let road = playlist(&mut conn, "Road: Trip", &ids[..2]);
-        let mut p = Profile { dest: stick.to_string_lossy().into(), whole_library: false, playlists: vec![road], remove_unselected: true };
+        let mut p = Profile { dest: stick.to_string_lossy().into(), whole_library: false, playlists: vec![road], remove_unselected: true, convert: None };
 
         let r = sync(&conn, &p);
         assert_eq!((r.copied, r.unchanged, r.removed, r.playlists), (2, 0, 0, 1), "{r:?}");
@@ -620,12 +726,96 @@ mod tests {
     }
 
     #[test]
+    fn converts_lossless_files_and_follows_a_new_format() {
+        let (root, mut conn, ids) = setup("convert");
+        let stick = root.join("stick");
+        let wav = root.join("music/Wave.wav");
+        crate::kaseki::tests::write_wav(&wav, 44_100, 44_100, |i| ((i % 100) as i16 - 50) * 300);
+        let t = Track {
+            path: wav.to_string_lossy().into(),
+            title: "Wave".into(),
+            artist: "Artist".into(),
+            album: "Album".into(),
+            track_no: Some(4),
+            duration: 1.0,
+            format: "WAV".into(),
+            bit_depth: Some(16),
+            sample_rate: Some(44_100),
+            mtime: crate::meta::file_mtime(&wav),
+            ..Default::default()
+        };
+        let wave = db::upsert_track(&conn, &t).unwrap();
+        let list = playlist(&mut conn, "Mix", &[ids[0], wave]);
+        let mp3 = Convert { format: convert::Format::Mp3, quality: convert::Quality::High };
+        let mut p = Profile {
+            dest: stick.to_string_lossy().into(),
+            whole_library: true,
+            playlists: vec![list],
+            remove_unselected: false,
+            convert: Some(mp3),
+        };
+
+        // The WAV becomes an MP3; the (lossy) MP3s are copied as they are.
+        let r = sync(&conn, &p);
+        assert_eq!((r.copied, r.failed.len()), (4, 0), "{r:?}");
+        assert!(stick.join("Artist/Album/04 Wave.mp3").exists());
+        assert_eq!(fs::read(stick.join("Artist/Album/01 One.mp3")).unwrap().len(), 1000);
+        let m3u = fs::read_to_string(stick.join("Mix.m3u8")).unwrap();
+        assert!(m3u.contains("Artist/Album/04 Wave.mp3"), "{m3u}");
+
+        // Nothing changed: nothing converted again.
+        let r = sync(&conn, &p);
+        assert_eq!((r.copied, r.unchanged), (0, 4), "{r:?}");
+
+        // Another format: converted again, and the old file goes even without
+        // "remove unselected", so the track isn't on the drive twice.
+        p.convert = Some(Convert { format: convert::Format::Vorbis, quality: convert::Quality::Smaller });
+        let r = sync(&conn, &p);
+        assert_eq!((r.copied, r.unchanged, r.removed), (1, 3, 1), "{r:?}");
+        assert!(stick.join("Artist/Album/04 Wave.ogg").exists());
+        assert!(!stick.join("Artist/Album/04 Wave.mp3").exists());
+        assert!(fs::read_to_string(stick.join("Mix.m3u8")).unwrap().contains("Artist/Album/04 Wave.ogg"));
+
+        // Back to plain copying: the WAV itself goes on the drive.
+        p.convert = None;
+        let r = sync(&conn, &p);
+        assert_eq!((r.copied, r.removed), (1, 1), "{r:?}");
+        assert!(stick.join("Artist/Album/04 Wave.wav").exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Sync real files through a format, to check the results with other tools:
+    /// HONEYCOMB_CONVERT_SRC=dir HONEYCOMB_CONVERT_DEST=dir HONEYCOMB_CONVERT_FORMAT=mp3 \
+    ///   cargo test --lib real_conversion -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn real_conversion() {
+        let src = std::env::var("HONEYCOMB_CONVERT_SRC").expect("HONEYCOMB_CONVERT_SRC");
+        let dest = std::env::var("HONEYCOMB_CONVERT_DEST").expect("HONEYCOMB_CONVERT_DEST");
+        let format: convert::Format =
+            serde_json::from_value(serde_json::json!(std::env::var("HONEYCOMB_CONVERT_FORMAT").unwrap())).unwrap();
+        let conn = Connection::open_in_memory().unwrap();
+        db::migrate(&conn).unwrap();
+        for e in walkdir::WalkDir::new(&src).into_iter().filter_map(|e| e.ok()).filter(|e| e.file_type().is_file()) {
+            if let Ok(t) = crate::meta::read_track(e.path()) {
+                db::upsert_track(&conn, &t).unwrap();
+            }
+        }
+        let c = Convert { format, quality: convert::Quality::High };
+        let p = Profile { dest, whole_library: true, playlists: vec![], remove_unselected: false, convert: Some(c) };
+        let started = Instant::now();
+        let r = sync(&conn, &p);
+        println!("{r:?} in {:.1} s", started.elapsed().as_secs_f64());
+        assert!(r.failed.is_empty());
+    }
+
+    #[test]
     fn never_overwrites_a_file_it_did_not_write() {
         let (root, conn, _) = setup("theirs");
         let stick = root.join("stick");
         fs::create_dir_all(stick.join("Artist/Album")).unwrap();
         fs::write(stick.join("Artist/Album/01 One.mp3"), "someone else's").unwrap();
-        let p = Profile { dest: stick.to_string_lossy().into(), whole_library: true, playlists: vec![], remove_unselected: true };
+        let p = Profile { dest: stick.to_string_lossy().into(), whole_library: true, playlists: vec![], remove_unselected: true, convert: None };
         let r = sync(&conn, &p);
         assert_eq!(r.copied, 2);
         assert_eq!(r.failed.len(), 1, "{r:?}");
@@ -637,7 +827,7 @@ mod tests {
     fn cancelling_leaves_no_partial_files() {
         let (root, conn, _) = setup("cancel");
         let stick = root.join("stick");
-        let p = Profile { dest: stick.to_string_lossy().into(), whole_library: true, playlists: vec![], remove_unselected: false };
+        let p = Profile { dest: stick.to_string_lossy().into(), whole_library: true, playlists: vec![], remove_unselected: false, convert: None };
         let cancel = AtomicBool::new(true);
         let resolve = |id| db::manual_playlist_track_ids(&conn, id);
         let r = run(&conn, &p, &resolve, &|_| {}, &cancel).unwrap();
@@ -670,7 +860,7 @@ mod tests {
         });
         fs::write(stick.join(MANIFEST), manifest.to_string()).unwrap();
         let only = playlist(&mut conn, "Only", &ids[..1]);
-        let p = Profile { dest: stick.to_string_lossy().into(), whole_library: false, playlists: vec![only], remove_unselected: true };
+        let p = Profile { dest: stick.to_string_lossy().into(), whole_library: false, playlists: vec![only], remove_unselected: true, convert: None };
         let r = sync(&conn, &p);
         assert_eq!((r.copied, r.removed), (1, 0), "{r:?}");
         assert_eq!(fs::read_to_string(&outside).unwrap(), "keep me");
@@ -693,7 +883,7 @@ mod tests {
             "files": { "Artist/Album/01 One.mp3": { "trackId": 999, "size": 1000, "mtime": 0 } },
         });
         fs::write(stick.join(MANIFEST), manifest.to_string()).unwrap();
-        let p = Profile { dest: stick.to_string_lossy().into(), whole_library: false, playlists: vec![], remove_unselected: true };
+        let p = Profile { dest: stick.to_string_lossy().into(), whole_library: false, playlists: vec![], remove_unselected: true, convert: None };
         // Nothing chosen: the manifest's file is "stale" and would be removed.
         let r = sync(&conn, &p);
         assert_eq!(r.removed, 0, "{r:?}");
@@ -713,7 +903,7 @@ mod tests {
         fs::create_dir_all(player.join(".rockbox")).unwrap();
         let music = player.join("Music");
         fs::create_dir_all(&music).unwrap();
-        let p = Profile { dest: music.to_string_lossy().into(), whole_library: true, playlists: vec![], remove_unselected: false };
+        let p = Profile { dest: music.to_string_lossy().into(), whole_library: true, playlists: vec![], remove_unselected: false, convert: None };
         sync(&conn, &p);
 
         let log = player.join(".rockbox/playback.log");

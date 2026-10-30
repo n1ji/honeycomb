@@ -1,6 +1,6 @@
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
-import { api, SyncProfile, SyncReport } from "../api";
+import { api, SyncConvert, SyncProfile, SyncReport } from "../api";
 import { store } from "../store";
 import { h, toast } from "../util";
 import { run } from "./actions";
@@ -36,6 +36,32 @@ export function openSync() {
   const lists = h("div", { class: "sync-lists" });
   const whole = h("input", { type: "checkbox" });
   const remove = h("input", { type: "checkbox" });
+  const convertOn = h("input", { type: "checkbox" });
+  const format = h(
+    "select",
+    { class: "input" },
+    h("option", { value: "mp3" }, "MP3"),
+    h("option", { value: "aac" }, "AAC (.m4a)"),
+    h("option", { value: "vorbis" }, "Ogg Vorbis"),
+    h("option", { value: "flac16" }, "FLAC, 16-bit"),
+  );
+  const quality = h(
+    "select",
+    { class: "input" },
+    h("option", { value: "high" }, "High"),
+    h("option", { value: "smaller" }, "Smaller files"),
+  );
+  const qualityField = h("label", { class: "field inline" }, h("span", {}, "Quality"), quality);
+  const convertNote = h("p", { class: "muted" });
+  const convertOptions = h(
+    "div",
+    {},
+    h("label", { class: "field inline" }, h("span", {}, "Convert to"), format),
+    qualityField,
+    convertNote,
+  );
+  /** The last format chosen, so switching converting off and on again keeps it. */
+  let lastConvert: SyncConvert = { format: "mp3", quality: "high" };
   const syncBtn = button("Sync", () => run(startSync), true);
 
   const describeDest = async () => {
@@ -58,9 +84,40 @@ export function openSync() {
           .join(" ");
   };
 
+  // `.field` sets its own display, which beats the hidden attribute.
+  const show = (el: HTMLElement, on: boolean) => (el.style.display = on ? "" : "none");
+  const renderConvert = () => {
+    if (p.convert) lastConvert = p.convert;
+    convertOn.checked = !!p.convert;
+    format.value = lastConvert.format;
+    quality.value = lastConvert.quality;
+    show(convertOptions, !!p.convert);
+    show(qualityField, lastConvert.format !== "flac16");
+    convertNote.textContent =
+      lastConvert.format === "flac16"
+        ? "24-bit and high-resolution files become 16-bit FLAC, still lossless at CD quality. Everything else is copied as it is."
+        : "FLAC, ALAC, WAV and AIFF files are converted; MP3, AAC and Ogg files are copied as they are. Converting takes a while the first time; later syncs only convert what's new or changed.";
+  };
+  const setConvert = () => {
+    const chosen = { format: format.value as SyncConvert["format"], quality: quality.value as SyncConvert["quality"] };
+    p.convert = convertOn.checked ? chosen : null;
+    lastConvert = chosen;
+    renderConvert();
+  };
+  convertOn.addEventListener("change", setConvert);
+  format.addEventListener("change", setConvert);
+  quality.addEventListener("change", setConvert);
+  run(async () => {
+    const formats = await api.syncFormats();
+    const aac = format.querySelector<HTMLOptionElement>('option[value="aac"]')!;
+    aac.disabled = !formats.aac;
+    if (!formats.aac) aac.textContent = "AAC (.m4a), only on macOS for now";
+  });
+
   const renderLists = () => {
     whole.checked = p.wholeLibrary;
     remove.checked = p.removeUnselected;
+    renderConvert();
     lists.replaceChildren(
       ...(store.playlists.length
         ? store.playlists.map((pl) => {
@@ -110,6 +167,9 @@ export function openSync() {
       h("label", { class: "check" }, whole, "The whole library"),
       lists,
       h("label", { class: "check" }, remove, "Remove synced files that are no longer chosen"),
+      h("h3", {}, "Converting"),
+      h("label", { class: "check" }, convertOn, "Convert lossless files to save space or suit the player"),
+      convertOptions,
       h(
         "p",
         { class: "muted" },
@@ -154,7 +214,7 @@ export function openSync() {
   function showReport(r: SyncReport) {
     const lines = [
       r.cancelled ? "Sync cancelled. What was copied so far is complete and stays on the device." : "Sync finished.",
-      `${plural(r.copied, "track")} copied (${gb(r.bytesCopied)}), ${r.unchanged.toLocaleString()} already up to date, ${r.removed.toLocaleString()} removed.`,
+      `${plural(r.copied, "track")} ${p.convert ? "copied or converted" : "copied"} (${gb(r.bytesCopied)}), ${r.unchanged.toLocaleString()} already up to date, ${r.removed.toLocaleString()} removed.`,
       r.playlists ? `${plural(r.playlists, "playlist")} written.` : "",
       r.playsImported ? `${plural(r.playsImported, "play")} from the player added to your play counts.` : "",
     ].filter(Boolean);

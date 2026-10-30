@@ -1,3 +1,4 @@
+mod convert;
 mod db;
 mod importer;
 mod kaseki;
@@ -423,6 +424,12 @@ async fn sync_run(app: AppHandle, profile: sync::Profile) -> CmdResult<sync::Rep
     .map_err(err)?
 }
 
+/// Which conversion formats this system can make (AAC needs the system's encoder).
+#[tauri::command]
+fn sync_formats() -> serde_json::Value {
+    serde_json::json!({ "aac": convert::aac_available() })
+}
+
 #[tauri::command]
 fn sync_cancel(state: State<AppState>) {
     state.sync_cancel.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -721,6 +728,7 @@ pub fn run() {
             sync_target,
             sync_run,
             sync_cancel,
+            sync_formats,
             get_lyrics,
             artwork_ext,
             save_artwork,

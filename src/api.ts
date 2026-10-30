@@ -142,6 +142,11 @@ export interface UpdateStatus {
   updateUrl: string;
 }
 
+export interface SyncConvert {
+  format: "mp3" | "aac" | "vorbis" | "flac16";
+  quality: "high" | "smaller";
+}
+
 export interface SyncProfile {
   /** Folder on the device that the music goes into. */
   dest: string;
@@ -149,6 +154,8 @@ export interface SyncProfile {
   playlists: number[];
   /** Remove synced files that are no longer chosen. */
   removeUnselected: boolean;
+  /** Convert lossless files to this; missing or null copies everything as it is. */
+  convert?: SyncConvert | null;
 }
 
 export interface SyncTarget {
@@ -222,6 +229,8 @@ export const api = {
   syncTarget: (dest: string) => invoke<SyncTarget>("sync_target", { dest }),
   syncRun: (profile: SyncProfile) => invoke<SyncReport>("sync_run", { profile }),
   syncCancel: () => invoke<void>("sync_cancel"),
+  /** Which conversion formats this system can make. */
+  syncFormats: () => invoke<{ aac: boolean }>("sync_formats"),
   uiReady: (tracks: number) => invoke<void>("ui_ready", { tracks }),
   updateStatus: (refresh = false) => invoke<UpdateStatus>("update_status", { refresh }),
   /** Downloads, installs and restarts; resolves only if something went wrong before the restart. */

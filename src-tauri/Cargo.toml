@@ -47,6 +47,12 @@ souvlaki = { version = "0.8", default-features = false, features = ["use_zbus"] 
 # Secret Service over zbus, so Linux still needs no libdbus).
 keyring = "4.2"
 tauri-plugin-updater = "2"
+# Converting lossless files while syncing: LAME (MP3, gapless via its LAME
+# tag), libvorbis and a pure-Rust FLAC encoder, all built in. AAC uses the
+# system's encoder (afconvert on macOS).
+mp3lame-encoder = "0.2"
+vorbis_rs = "0.5"
+flacenc = { version = "0.5", default-features = false }
 
 [dev-dependencies]
 # Mock runtime for driving the player in tests.

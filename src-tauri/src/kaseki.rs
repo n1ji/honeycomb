@@ -523,8 +523,13 @@ impl Source {
         }
     }
 
+    /// The speaker layout of the last decoded buffer.
+    pub(crate) fn layout(&self) -> Channels {
+        self.layout
+    }
+
     /// The next decoded buffer, or `None` at the end of the file.
-    fn decode_next(&mut self) -> Option<Buf> {
+    pub(crate) fn decode_next(&mut self) -> Option<Buf> {
         if let Some(first) = self.first.take() {
             return Some(first);
         }
@@ -618,7 +623,7 @@ fn ts_frames(time_base: Option<TimeBase>, rate: u32, ts: u64) -> u64 {
 /// to the left and right outputs. Centre channels go to both and side and rear
 /// channels to their own side, at -3 dB; LFE is left out, as most downmixes
 /// do. Scaled so that full-scale audio on every channel can't clip.
-fn stereo_fold(layout: Channels, in_ch: usize) -> Vec<[f32; 2]> {
+pub(crate) fn stereo_fold(layout: Channels, in_ch: usize) -> Vec<[f32; 2]> {
     const H: f32 = std::f32::consts::FRAC_1_SQRT_2;
     let left = Channels::FRONT_LEFT_CENTRE
         | Channels::FRONT_LEFT_WIDE
@@ -671,7 +676,7 @@ fn stereo_fold(layout: Channels, in_ch: usize) -> Vec<[f32; 2]> {
 
 /// Copy interleaved audio from `in_ch` to `out_ch` channels. `fold` (from
 /// `stereo_fold`) mixes surround down for stereo and mono outputs.
-fn map_channels(input: &[f32], in_ch: usize, out_ch: usize, fold: &[[f32; 2]], out: &mut Vec<f32>) {
+pub(crate) fn map_channels(input: &[f32], in_ch: usize, out_ch: usize, fold: &[[f32; 2]], out: &mut Vec<f32>) {
     if in_ch == out_ch {
         out.extend_from_slice(input);
     } else if in_ch == 1 {
@@ -704,7 +709,7 @@ fn map_channels(input: &[f32], in_ch: usize, out_ch: usize, fold: &[[f32; 2]], o
 
 /// Band-limited sinc resampling with rubato, trimming its start-up delay so
 /// the output lines up with the input.
-struct Rs {
+pub(crate) struct Rs {
     r: SincFixedIn<f32>,
     ch: usize,
     ratio: f64,
@@ -716,7 +721,7 @@ struct Rs {
 }
 
 impl Rs {
-    fn new(in_rate: u32, out_rate: u32, ch: usize) -> Result<Rs, String> {
+    pub(crate) fn new(in_rate: u32, out_rate: u32, ch: usize) -> Result<Rs, String> {
         let params = SincInterpolationParameters {
             sinc_len: 256,
             f_cutoff: rubato::calculate_cutoff(256, WindowFunction::BlackmanHarris2),
@@ -730,7 +735,7 @@ impl Rs {
         Ok(Rs { r, ch, ratio, inbuf: vec![Vec::new(); ch], to_trim, out_total: 0 })
     }
 
-    fn push(&mut self, interleaved: &[f32], out: &mut Vec<f32>) {
+    pub(crate) fn push(&mut self, interleaved: &[f32], out: &mut Vec<f32>) {
         for f in interleaved.chunks_exact(self.ch) {
             for (c, &s) in f.iter().enumerate() {
                 self.inbuf[c].push(s);
@@ -773,7 +778,7 @@ impl Rs {
 
     /// Flush the filter so the output holds exactly `expected` frames in all.
     /// `out[..keep]` is already in the buffer and can't be taken back.
-    fn finish(&mut self, expected: u64, out: &mut Vec<f32>, keep: usize) {
+    pub(crate) fn finish(&mut self, expected: u64, out: &mut Vec<f32>, keep: usize) {
         if !self.inbuf[0].is_empty() {
             if let Ok(planar) = self.r.process_partial(Some(&self.inbuf), None) {
                 self.emit(&planar, out);
