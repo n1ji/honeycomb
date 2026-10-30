@@ -3,6 +3,7 @@ mod db;
 mod importer;
 mod kaseki;
 mod lyrics;
+mod matching;
 mod media;
 mod meta;
 mod models;
@@ -484,9 +485,9 @@ fn plugin_secret_set(app: AppHandle, plugin: String, key: String, value: Option<
 
 /// Library track ids for tracks described by another service (null where none matched).
 #[tauri::command]
-async fn match_tracks(app: AppHandle, candidates: Vec<plugins::Candidate>) -> CmdResult<Vec<Option<i64>>> {
+async fn match_tracks(app: AppHandle, candidates: Vec<matching::Candidate>) -> CmdResult<Vec<Option<i64>>> {
     tauri::async_runtime::spawn_blocking(move || {
-        let index = plugins::LibraryIndex::new(&db::all_tracks(&app.state::<AppState>().conn()).map_err(err)?);
+        let index = matching::LibraryIndex::new(&db::all_tracks(&app.state::<AppState>().conn()).map_err(err)?);
         Ok(candidates.iter().map(|c| index.find(c)).collect())
     })
     .await

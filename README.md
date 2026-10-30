@@ -134,6 +134,10 @@ src-tauri/src/
   db.rs              SQLite library database
 ```
 
+## Contributing
+
+Issues and pull requests are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). Changes to Kaseki and the shared library code need a one-time [contributor agreement](CLA.md); the rest of Honeycomb doesn't.
+
 ## License
 
 Copyright (C) 2026 n1ji
