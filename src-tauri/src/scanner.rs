@@ -93,6 +93,8 @@ pub(crate) fn scan(db_path: &Path, progress: &dyn Fn(Progress)) -> Result<Finish
     let mut changed = 0;
     let mut errors = 0;
     let mut inboxed = 0;
+    // Rows first inserted by this scan, and whether they went to the inbox.
+    let mut fresh: Vec<(i64, bool)> = Vec::new();
 
     std::thread::scope(|s| -> Result<()> {
         let (tx, rx) = mpsc::sync_channel(256);
@@ -137,9 +139,13 @@ pub(crate) fn scan(db_path: &Path, progress: &dyn Fn(Progress)) -> Result<Finish
                 Some(t) => {
                     let id = db::upsert_track(&conn, &t)?;
                     let is_new = !known.contains_key(&t.path);
-                    if is_new && established.iter().any(|f| Path::new(&t.path).starts_with(f)) {
+                    let to_inbox = is_new && established.iter().any(|f| Path::new(&t.path).starts_with(f));
+                    if to_inbox {
                         conn.execute("UPDATE tracks SET inbox = 1 WHERE id = ?1", [id])?;
                         inboxed += 1;
+                    }
+                    if is_new {
+                        fresh.push((id, to_inbox));
                     }
                     changed += 1;
                 }
@@ -165,8 +171,32 @@ pub(crate) fn scan(db_path: &Path, progress: &dyn Fn(Progress)) -> Result<Finish
     })?;
 
     // Drop tracks whose files are gone or no longer under a library folder.
-    let stale: Vec<&String> = known.keys().filter(|p| !seen.contains(*p)).collect();
+    let mut stale: Vec<&String> = known.keys().filter(|p| !seen.contains(*p)).collect();
     conn.execute_batch("BEGIN")?;
+    let moved = find_moves(&conn, &stale, &fresh)?;
+    for (old, _, new, new_inboxed) in &moved {
+        // The old row keeps its id, stats, inbox state and playlist spots and
+        // takes the new file's path and tags; the duplicate row goes.
+        let Some(t) = db::track_by_id(&conn, *new)? else { continue };
+        conn.execute("DELETE FROM tracks WHERE id = ?1", [new])?;
+        conn.execute(
+            "UPDATE tracks SET path = ?2, title = ?3, artist = ?4, album_artist = ?5, album = ?6,
+                genre = ?7, composer = ?8, comment = ?9, year = ?10, track_no = ?11, disc_no = ?12,
+                duration = ?13, bitrate = ?14, sample_rate = ?15, format = ?16, mtime = ?17, has_art = ?18,
+                bit_depth = ?19
+             WHERE id = ?1",
+            rusqlite::params![
+                old, t.path, t.title, t.artist, t.album_artist, t.album, t.genre, t.composer, t.comment,
+                t.year, t.track_no, t.disc_no, t.duration, t.bitrate, t.sample_rate, t.format, t.mtime,
+                t.has_art, t.bit_depth
+            ],
+        )?;
+        if *new_inboxed {
+            inboxed -= 1;
+        }
+    }
+    let moved_from: HashSet<&String> = moved.iter().map(|m| &m.1).collect();
+    stale.retain(|p| !moved_from.contains(p));
     for p in &stale {
         conn.execute("DELETE FROM tracks WHERE path = ?1", [p])?;
     }
@@ -174,6 +204,48 @@ pub(crate) fn scan(db_path: &Path, progress: &dyn Fn(Progress)) -> Result<Finish
     conn.execute_batch("COMMIT")?;
 
     Ok(Finished { added_or_updated: changed, removed: stale.len(), errors, inboxed })
+}
+
+/// Pair tracks whose files vanished with tracks first found in this scan that
+/// look like the same file moved: same title, artist, album and audio format
+/// (there's no file size in the library, so format, bitrate and sample rate
+/// stand in for it) and a duration within half a second. Only one-to-one pairs
+/// count. Returns (old id, old path, new id, new row went to the inbox).
+fn find_moves(
+    conn: &rusqlite::Connection,
+    stale: &[&String],
+    fresh: &[(i64, bool)],
+) -> Result<Vec<(i64, String, i64, bool)>> {
+    if stale.is_empty() || fresh.is_empty() {
+        return Ok(Vec::new());
+    }
+    type Key = (String, String, String, String, Option<u32>, Option<u32>);
+    let key = |t: &crate::models::Track| -> Key {
+        (t.title.clone(), t.artist.clone(), t.album.clone(), t.format.clone(), t.bitrate, t.sample_rate)
+    };
+    let mut new_by_key: HashMap<Key, Vec<(crate::models::Track, bool)>> = HashMap::new();
+    for t in db::tracks_by_ids(conn, &fresh.iter().map(|f| f.0).collect::<Vec<_>>())? {
+        let inboxed = fresh.iter().any(|f| f.0 == t.id && f.1);
+        new_by_key.entry(key(&t)).or_default().push((t, inboxed));
+    }
+    let mut old = Vec::new();
+    for p in stale {
+        if let Some(id) = db::track_id_by_path(conn, p)? {
+            old.extend(db::track_by_id(conn, id)?);
+        }
+    }
+    let close = |a: &crate::models::Track, b: &crate::models::Track| (a.duration - b.duration).abs() <= 0.5;
+    let mut pairs = Vec::new();
+    for o in &old {
+        let Some(group) = new_by_key.get(&key(o)) else { continue };
+        let mut hits = group.iter().filter(|(n, _)| close(o, n));
+        let (Some((n, inboxed)), None) = (hits.next(), hits.next()) else { continue };
+        let rivals = old.iter().filter(|o2| key(o2) == key(o) && close(o2, n)).count();
+        if rivals == 1 {
+            pairs.push((o.id, o.path.clone(), n.id, *inboxed));
+        }
+    }
+    Ok(pairs)
 }
 
 #[cfg(test)]
@@ -243,6 +315,56 @@ mod tests {
         let f = scan(&db_path, &quiet).unwrap();
         assert_eq!((f.added_or_updated, f.inboxed), (0, 0));
         assert_eq!(inbox_names(&conn), ["new.wav"]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn moved_files_keep_their_row() {
+        let root = std::env::temp_dir().join(format!("hc-move-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let music = root.join("music");
+        std::fs::create_dir_all(&music).unwrap();
+        let before = music.join("song.wav");
+        write_wav(&before);
+        let tags = crate::models::TagEdit {
+            title: Some("Song".into()),
+            artist: Some("Artist".into()),
+            album: Some("Album".into()),
+            ..Default::default()
+        };
+        meta::write_tags(&before, &tags).unwrap();
+        let db_path = root.join("library.db");
+        let conn = db::open(&db_path).unwrap();
+        db::migrate(&conn).unwrap();
+        conn.execute("INSERT INTO folders (path) VALUES (?1)", [music.to_string_lossy()]).unwrap();
+        let quiet = |_: Progress| {};
+        scan(&db_path, &quiet).unwrap();
+
+        let id = db::track_id_by_path(&conn, &before.to_string_lossy()).unwrap().unwrap();
+        conn.execute("UPDATE tracks SET rating = 7, loved = 1 WHERE id = ?1", [id]).unwrap();
+        db::record_play(&conn, id, 1_700_000_000).unwrap();
+        conn.execute("INSERT INTO playlists (name, created) VALUES ('Mix', 0)", []).unwrap();
+        let pl = conn.last_insert_rowid();
+        conn.execute("INSERT INTO playlist_tracks (playlist_id, track_id, position) VALUES (?1, ?2, 0)", [pl, id])
+            .unwrap();
+        let old = db::track_by_id(&conn, id).unwrap().unwrap();
+
+        // Renamed and moved into a subfolder: same row, new path, nothing in the inbox.
+        std::fs::create_dir_all(music.join("sub")).unwrap();
+        let after = music.join("sub").join("renamed.wav");
+        std::fs::rename(&before, &after).unwrap();
+        let f = scan(&db_path, &quiet).unwrap();
+        assert_eq!((f.removed, f.inboxed), (0, 0));
+        let tracks = db::all_tracks(&conn).unwrap();
+        assert_eq!(tracks.len(), 1);
+        let t = &tracks[0];
+        assert_eq!(t.id, id);
+        assert_eq!(t.path, after.to_string_lossy());
+        assert_eq!(
+            (t.rating, t.loved, t.play_count, t.last_played, t.date_added, t.inbox),
+            (7, true, 1, Some(1_700_000_000), old.date_added, false)
+        );
+        assert_eq!(db::manual_playlist_track_ids(&conn, pl).unwrap(), [id]);
         let _ = std::fs::remove_dir_all(&root);
     }
 }
