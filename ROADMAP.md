@@ -13,33 +13,44 @@ This is a plan, not a promise. Each month has a "done when" line. Whatever slips
 
 ---
 
-## Already done (October 2026)
+## Where things stand (reviewed 2026-10-31)
 
-- Library, column browser, tag editor, smart playlists, gapless playback, play counts.
+October went faster than planned: most of Months 1–4 already shipped in 0.1.1 or is waiting under "Unreleased" in `CHANGELOG.md`. Each month below marks its items ✅ done, 🟡 partly done or untested, and the rest open.
+
+**Already done (October 2026)**
+
+- Library, column browser (with multi-pick), tag editor, smart playlists, gapless playback, play counts.
+- Kaseki, Honeycomb's own audio engine, with a quality badge and signal path view.
 - Importer for iTunes-format library XML and M3U files, tested on a real 4.5k-track export.
 - Half-star ratings and a loved flag.
 - Resizable panels and columns, themes, accent color, custom background and secondary colors.
+- Plugins, with scrobbling as the first bundled one (moved up from "Later").
+- Lyrics: embedded, `.lrc` files and online lookup, synced lines highlighted (moved up from Month 5).
+- Inbox as a waiting room for new files, and ignored files.
+- Moving or renaming files keeps their play counts, ratings and playlist spots.
+- Listening history (what played, when, and how it ended), the groundwork for sound-based playlists.
+- Multi-device plan over OpenSubsonic (`docs/ARCHITECTURE.md`), approved but not built.
 
 ## Month 1 (November): ship something people can install
 
-- **Decide:** public or private repo (this decides where downloads live and how CI is paid for), whether to keep the name, and when to buy the Apple Developer account.
-- Change the app identifier to a domain you own (e.g. `dev.n1ji.honeycomb`) and move the existing library database across automatically.
-- Linux in CI: AppImage, .deb and .rpm, tested on a real distro. The webview on Linux (WebKitGTK) is the main scrolling risk.
-- Built-in auto-updater (Tauri updater with a signing key).
-- A download page on n1ji.dev.
-- Performance baseline: generate a 100k-track test library and record startup time, memory, search, scrolling and idle CPU.
-- Fix: removing the playing track stops playback (#4), and audio dies when headphones are unplugged (#5).
+- 🟡 **Decide:** ✅ public repo (since 2026-10-22), ✅ keep the name; still open: when to buy the Apple Developer account.
+- ✅ Change the app identifier to `dev.n1ji.honeycomb` and move the existing library database across automatically.
+- 🟡 Linux in CI: AppImage, .deb and .rpm build on manual runs. Still to do: test on a real distro, then add Linux to tag builds. The webview on Linux (WebKitGTK) is the main scrolling risk.
+- ✅ Built-in auto-updater (Tauri updater with a signing key; first release with it is the next one).
+- ✅ A download page (honeycomb.n1ji.dev).
+- ✅ Performance baseline: 100k-track library, see `docs/perf-baseline.md` (startup 0.95 s, search ~65 ms, sort ~70 ms).
+- 🟡 Fix: removing the playing track stops playback (#4), and audio dies when headphones are unplugged (#5). Fixed in code, still needs a listening test.
 
 **Done when:** a stranger can download an alpha for Mac or Linux, install it, and receive the next update automatically.
 
 ## Month 2 (December): Last.fm
 
-- Sign in through Last.fm's browser login, and keep the session in the system keychain.
-- "Now playing" updates, and scrobbles following Last.fm's rules: tracks longer than 30 seconds, scrobbled after half the track or 4 minutes.
-- An offline queue: scrobbles made without internet are sent later, in order, with no duplicates.
-- Sync loves both ways with the loved flag.
+- ✅ Sign in through Last.fm's browser login, and keep the session in the system keychain (ListenBrainz too).
+- ✅ "Now playing" updates, and scrobbles following Last.fm's rules: tracks longer than 30 seconds, scrobbled after half the track or 4 minutes.
+- ✅ An offline queue: scrobbles made without internet are sent later, in order, with no duplicates.
+- Sync loves both ways with the loved flag. (The loved flag isn't shown in the UI yet either.)
 - Optional: import play counts from Last.fm for tracks that have none locally.
-- Media keys and the system Now Playing controls (macOS Now Playing, MPRIS on Linux), so headphone buttons and keyboard keys work. This also matters for scrobbling from the background.
+- 🟡 Media keys and the system Now Playing controls (`media.rs`). Works on macOS; not tested on Windows or Linux, and media keys sometimes going to a browser tab isn't confirmed fixed.
 
 **Done when:** a week of daily listening shows up correctly on Last.fm, including songs played offline.
 
@@ -47,19 +58,22 @@ This is a plan, not a promise. Each month has a "done when" line. Whatever slips
 
 ## Month 3 (January): sync to flash drives and USB players
 
-- Sync profiles: pick a destination (any mounted drive or folder) and what goes on it (playlists, smart playlists, or the whole library).
-- Copy only what changed, optionally remove files that are no longer selected, and check free space before starting.
-- Folder layout options (Artist/Album/Track), and playlists written as M3U files with relative paths, so car stereos and players can read them.
-- File names made safe for FAT32/exFAT, with very long paths shortened.
-- A progress bar, and safe to cancel or unplug mid-sync.
+All shipped in 0.1.1, except layout options.
+
+- ✅ Sync profiles: pick a destination (any mounted drive or folder) and what goes on it (playlists, smart playlists, or the whole library).
+- ✅ Copy only what changed, remove files that are no longer selected (only files Honeycomb put there), and check free space before starting.
+- 🟡 Playlists written as M3U8 files with relative paths ✅. The folder layout is fixed at Artist/Album/NN Title; choosing a layout is still open.
+- ✅ File names made safe for FAT32/exFAT, with very long paths shortened.
+- ✅ A progress bar, and safe to cancel or unplug mid-sync.
+- Still open: the car-stereo test from "Done when".
 
 **Done when:** syncing 5 playlists to a USB stick plays correctly in a car stereo, and re-syncing after a change copies only the difference.
 
 ## Month 4 (February): sync, part 2
 
-- Convert while syncing (e.g. FLAC → AAC or MP3) for small or older players, with converted files cached so re-syncs are fast. Needs an encoder. ffmpeg is the likely option, but check its license before bundling it.
+- ✅ Convert while syncing (lossless → MP3, AAC, Ogg Vorbis or 16-bit FLAC), re-syncs only convert what changed. Built-in encoders instead of ffmpeg, so there's no license question. AAC is macOS-only for now (`afconvert`); Windows and Linux still need an AAC encoder.
 - Android phones over MTP. This is hard on Mac, so check what's realistic early. If it isn't, fall back to "sync to a folder" plus a phone sync app.
-- Rockbox and similar players: read play counts back from the device. Stretch goal.
+- 🟡 Rockbox: play counts are read back from `playback.log` ✅. Scrobbling them needs a UTC offset first (Rockbox logs local time).
 
 **Done when:** a lossless library syncs to a small player as lossy files, and a phone works or the documented fallback does.
 
@@ -69,8 +83,8 @@ This is a plan, not a promise. Each month has a "done when" line. Whatever slips
 - An album art grid view.
 - ReplayGain (track and album volume leveling).
 - A basic equalizer.
-- Lyrics: show embedded lyrics. Online lookup comes later.
-- Fix: changing the queue in the last 2 seconds of a track (#3), and unreadable files being re-read on every rescan (#6). Find out why 64 files fail to read (#2).
+- ✅ Lyrics: embedded, `.lrc` and online lookup (done early).
+- 🟡 Fix: changing the queue in the last 2 seconds of a track (#3) is fixed in code and needs a listening test. Still open: unreadable files being re-read on every rescan (#6), and why 64 files fail to read (#2).
 
 **Done when:** Honeycomb works as someone's only player for two weeks without them going back.
 
@@ -89,9 +103,11 @@ This is a plan, not a promise. Each month has a "done when" line. Whatever slips
 
 ## Later (not in these 6 months)
 
-Online tag and artwork lookup, automatic file renaming and organizing, theme files and custom CSS, saved layout profiles, podcasts, internet radio, CD ripping, plugins, mobile apps.
+Online tag and artwork lookup, automatic file renaming and organizing, theme files and custom CSS, saved layout profiles, podcasts, internet radio, CD ripping.
 
-Remote server libraries: browse and play music from Navidrome and other servers that speak the Subsonic API (Gonic, Airsonic-Advanced, Ampache and the like), next to local folders. Stream through Kaseki, with ratings, play counts and scrobbles going back to the server, and maybe downloads for offline use.
+Multi-device over OpenSubsonic, planned in detail in `docs/ARCHITECTURE.md` (phases 1–6): the workspace split into shared crates, an OpenSubsonic server in the desktop app for paired phones, the desktop as a client of Navidrome and other Subsonic servers (streaming through Kaseki, pinning albums offline, ratings and play counts going back to the server), then the iOS app (separate, private repository) and cable sync. Phase 1 (the crate split) is small and could start early.
+
+Sound-based playlists: score tracks by measured sound (grit, punch, density, BPM) with Honeycomb's own analysis code, learn from the listening history, and only then mix in Last.fm similarity.
 
 ## Ground rules
 
