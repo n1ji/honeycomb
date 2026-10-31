@@ -31,6 +31,17 @@ October went faster than planned: most of Months 1–4 already shipped in 0.1.1 
 - Listening history (what played, when, and how it ended), the groundwork for sound-based playlists.
 - Multi-device plan over OpenSubsonic (`docs/ARCHITECTURE.md`), approved but not built.
 
+**Next up (picked 2026-10-31, aimed at 0.2)**
+
+These come first, ahead of the month order below:
+
+1. **Remember unreadable files (#6, #2).** Store each file the scanner can't read with its mtime and the error, skip it on rescans until it changes, and list them in Settings → Library with a "Read again" button. The list also shows which formats fail and why.
+2. **Show the loved flag.** A heart in the track list and player bar, and Love / Unlove in the context menu. Needed before loves sync with Last.fm.
+3. **Linux on release tags.** After one test on a real distro, add Linux to the tag default in `.github/workflows/build.yml` (today it only builds on manual runs).
+4. **ReplayGain.** Read track and album gain and peak tags, apply them in Kaseki's gain stage (switching exactly at the gapless marker), with a setting (Off / Track / Album), clipping prevention from the peak, and a line in the signal path view.
+5. **Watch library folders.** Use the `notify` crate to start the quick rescan a moment after files change, so new music lands in the Inbox without "Rescan now". If a scan is already running, run another one when it finishes.
+6. **Album art grid view.** A grid of albums for whatever the column browser and search currently show, with cached cover thumbnails so it stays fast at 100k tracks. Click to filter to the album, double-click to play it.
+
 ## Month 1 (November): ship something people can install
 
 - 🟡 **Decide:** ✅ public repo (since 2026-10-22), ✅ keep the name; still open: when to buy the Apple Developer account.
