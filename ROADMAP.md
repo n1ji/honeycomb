@@ -134,18 +134,14 @@ Lyrics were done in October.
 
 ## Month 6 (April): polish toward 1.0
 
+Kept to what 1.0 needs. Nice-to-haves moved to "Later".
+
 - Performance pass against the Month 1 baseline: load the library lazily so startup stays fast at 100k tracks, a faster search index, and cached artwork thumbnails.
 - Customization: choose, order and resize track list columns, and pick the column browser's fields.
 - A signed and notarized Mac build (needs the Apple account), and Linux packages on Flathub and/or the AUR.
 - Windows builds kept working, even though it isn't the main target.
 - A user guide covering migration, sync and Last.fm setup.
-- Library health view: missing cover art, missing genre or year, unreadable files, and likely duplicates (using `matching`).
 - Drag to reorder playlists and the play queue.
-- Crossfade as an option, off by default so gapless stays the default.
-- A mini player: a small window that stays on top.
-- A command palette (Cmd-K / Ctrl-K) to jump to any artist, album, playlist or setting.
-- Soft shadows and a little depth behind panels (no glass effects), and a cleanup script for contributors (`scripts/clean.sh`, dry run by default).
-- First step toward sound-based playlists: BPM detection in Honeycomb's own analysis code, filling a BPM column and smart rule.
 - Launch on Product Hunt with 1.0 (not before: the first launch gets the most attention). Prepare the gallery, the demo video, a maker's first comment, and early users who'll be around on launch day. Update the AlternativeTo listing and post to r/MacApps at the same time.
 
 **Done when:** a 1.0 beta is announced to Mac and Linux music library users.
@@ -156,9 +152,18 @@ Lyrics were done in October.
 
 Online tag and artwork lookup, automatic file renaming and organizing, theme files and custom CSS, saved layout profiles, podcasts, internet radio, CD ripping.
 
+Moved here from April to keep 1.0 manageable:
+
+- Library health view: missing cover art, missing genre or year, unreadable files, and likely duplicates (using `matching`).
+- Crossfade as an option, off by default so gapless stays the default.
+- A mini player: a small window that stays on top.
+- A command palette (Cmd-K / Ctrl-K) to jump to any artist, album, playlist or setting.
+- Soft shadows and a little depth behind panels (no glass effects).
+- A cleanup script for contributors (`scripts/clean.sh`, dry run by default). Small enough to do any time.
+
 Multi-device over OpenSubsonic, planned in detail in `docs/ARCHITECTURE.md` (phases 1–6): the workspace split into shared crates, an OpenSubsonic server in the desktop app for paired phones, the desktop as a client of Navidrome and other Subsonic servers (streaming through Kaseki, pinning albums offline, ratings and play counts going back to the server), then the iOS app (separate, private repository) and cable sync. Phase 1 (the crate split) is small and could start early.
 
-Sound-based playlists: score tracks by measured sound (grit, punch, density, BPM) with Honeycomb's own analysis code, learn from the listening history, and only then mix in Last.fm similarity.
+Sound-based playlists: score tracks by measured sound (grit, punch, density, BPM) with Honeycomb's own analysis code, learn from the listening history, and only then mix in Last.fm similarity. First step: BPM detection, filling a BPM column and smart rule.
 
 ## Ground rules
 
