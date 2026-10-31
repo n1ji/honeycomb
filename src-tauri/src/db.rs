@@ -68,7 +68,20 @@ pub fn migrate(conn: &Connection) -> Result<()> {
             fetched INTEGER NOT NULL
         );
         -- Files removed from the Inbox that scans skip until un-ignored.
-        CREATE TABLE IF NOT EXISTS ignored (path TEXT PRIMARY KEY, ignored_at INTEGER NOT NULL);",
+        CREATE TABLE IF NOT EXISTS ignored (path TEXT PRIMARY KEY, ignored_at INTEGER NOT NULL);
+        -- Listening history: one row per song played, however it ended. Ids are
+        -- made on the device, so logs from several devices merge without doubles.
+        CREATE TABLE IF NOT EXISTS listens (
+            id TEXT PRIMARY KEY,
+            track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+            started_at INTEGER NOT NULL,
+            ended_at INTEGER NOT NULL,
+            position REAL NOT NULL,
+            duration REAL NOT NULL,
+            heard REAL NOT NULL,
+            reason TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_listens_track ON listens(track_id);",
     )?;
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
     if version < 1 {
@@ -281,6 +294,45 @@ pub fn set_playlist_track_ids(conn: &mut Connection, id: i64, ids: &[i64]) -> Re
     Ok(())
 }
 
+/// How a song stopped playing, for the listening history.
+pub struct ListenEnd<'a> {
+    pub track_id: i64,
+    pub started_at: i64,
+    pub ended_at: i64,
+    /// Where in the song it stopped, in seconds.
+    pub position: f64,
+    pub duration: f64,
+    /// Seconds actually heard (seeking ahead doesn't count).
+    pub heard: f64,
+    /// "finished", "next", "previous", "jump", "replaced", "removed" or "stopped".
+    pub reason: &'a str,
+}
+
+/// Add a song to the listening history, unless it's switched off in Settings.
+pub fn record_listen(conn: &Connection, l: &ListenEnd) -> Result<()> {
+    let off: Option<String> =
+        conn.query_row("SELECT value FROM settings WHERE key = 'listenLog'", [], |r| r.get(0)).optional()?;
+    if off.as_deref() == Some("off") {
+        return Ok(());
+    }
+    let id: String = (0..16).map(|_| format!("{:02x}", rand::random::<u8>())).collect();
+    conn.execute(
+        "INSERT INTO listens (id, track_id, started_at, ended_at, position, duration, heard, reason)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![id, l.track_id, l.started_at, l.ended_at, l.position, l.duration, l.heard, l.reason],
+    )?;
+    Ok(())
+}
+
+pub fn listen_count(conn: &Connection) -> Result<i64> {
+    Ok(conn.query_row("SELECT COUNT(*) FROM listens", [], |r| r.get(0))?)
+}
+
+pub fn clear_listens(conn: &Connection) -> Result<()> {
+    conn.execute("DELETE FROM listens", [])?;
+    Ok(())
+}
+
 /// Take tracks out of the Inbox and into the library.
 pub fn accept_tracks(conn: &Connection, ids: &[i64]) -> Result<()> {
     for id in ids {
@@ -329,6 +381,22 @@ pub fn unignore(conn: &mut Connection, paths: &[String]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn listening_history_can_be_switched_off_and_cleared() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        conn.execute("INSERT INTO tracks (path, date_added) VALUES ('a', 0)", []).unwrap();
+        let end = ListenEnd { track_id: 1, started_at: 10, ended_at: 20, position: 8.5, duration: 200.0, heard: 8.5, reason: "next" };
+        record_listen(&conn, &end).unwrap();
+        record_listen(&conn, &end).unwrap();
+        assert_eq!(listen_count(&conn).unwrap(), 2, "each listen gets its own id");
+        set_setting(&conn, "listenLog", "off").unwrap();
+        record_listen(&conn, &end).unwrap();
+        assert_eq!(listen_count(&conn).unwrap(), 2);
+        clear_listens(&conn).unwrap();
+        assert_eq!(listen_count(&conn).unwrap(), 0);
+    }
 
     #[test]
     fn v1_migration_doubles_ratings_once() {

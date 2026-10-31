@@ -213,6 +213,9 @@ export const api = {
   ignoredFiles: () => invoke<IgnoredFile[]>("ignored_files"),
   /** Stop ignoring files; a rescan brings them back into the Inbox. */
   unignoreFiles: (paths: string[]) => invoke<void>("unignore_files", { paths }),
+  /** Songs in the listening history (what was played and how it ended). */
+  listenCount: () => invoke<number>("listen_count"),
+  clearListens: () => invoke<void>("clear_listens"),
   editTags: (ids: number[], edit: TagEdit) => invoke<Track[]>("edit_tags", { ids, edit }),
 
   getSettings: () => invoke<Record<string, string>>("get_settings"),

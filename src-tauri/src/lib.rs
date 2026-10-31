@@ -151,6 +151,17 @@ fn unignore_files(app: AppHandle, state: State<AppState>, paths: Vec<String>) ->
     Ok(())
 }
 
+/// Songs in the listening history.
+#[tauri::command]
+fn listen_count(state: State<AppState>) -> CmdResult<i64> {
+    db::listen_count(&state.conn()).map_err(err)
+}
+
+#[tauri::command]
+fn clear_listens(state: State<AppState>) -> CmdResult<()> {
+    db::clear_listens(&state.conn()).map_err(err)
+}
+
 #[tauri::command]
 fn edit_tags(state: State<AppState>, ids: Vec<i64>, edit: TagEdit) -> CmdResult<Vec<Track>> {
     let tracks = db::tracks_by_ids(&state.conn(), &ids).map_err(err)?;
@@ -735,6 +746,8 @@ pub fn run() {
             ignore_inbox_tracks,
             ignored_files,
             unignore_files,
+            listen_count,
+            clear_listens,
             edit_tags,
             get_settings,
             set_setting,

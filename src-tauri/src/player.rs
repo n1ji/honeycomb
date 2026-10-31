@@ -131,6 +131,7 @@ pub fn listen_threshold(duration: f64) -> Option<f64> {
 struct Listen {
     uid: u64,
     track_id: i64,
+    duration: f64,
     started_at: i64,
     /// Seconds actually heard; seeking ahead doesn't count.
     heard: f64,
@@ -198,6 +199,8 @@ struct Engine<R: Runtime> {
     media_last_index: Option<usize>,
     last_tick: Option<Tick>,
     listen: Option<Listen>,
+    /// Why the playing song is stopping and where (see `note_ending`).
+    ending: Option<(&'static str, f64)>,
     /// (queue item uid, what `kaseki::probe` found in its file).
     probed: Option<(u64, Option<kaseki::SourceInfo>)>,
     last_signal: Option<Signal>,
@@ -235,6 +238,7 @@ impl<R: Runtime> Engine<R> {
             media_last_index: None,
             last_tick: None,
             listen: None,
+            ending: None,
             probed: None,
             last_signal: None,
         }
@@ -285,6 +289,7 @@ impl<R: Runtime> Engine<R> {
         self.poll();
         match cmd {
             Cmd::Load(items, index) => {
+                self.note_ending("replaced");
                 self.unshuffled = None;
                 self.queue = self.stamp(items);
                 if index < self.queue.len() {
@@ -315,6 +320,7 @@ impl<R: Runtime> Engine<R> {
                 }
             }
             Cmd::Next => {
+                self.note_ending("next");
                 if let Some(cur) = self.current {
                     if self.position() > self.queue[cur].duration * 0.5 {
                         self.record_play(self.queue[cur].track_id);
@@ -337,6 +343,7 @@ impl<R: Runtime> Engine<R> {
                     if self.position() > 3.0 || cur == 0 {
                         self.seek(0.0);
                     } else {
+                        self.note_ending("previous");
                         self.start(cur - 1);
                     }
                 }
@@ -373,6 +380,7 @@ impl<R: Runtime> Engine<R> {
             }
             Cmd::Jump(i) => {
                 if i < self.queue.len() {
+                    self.note_ending("jump");
                     self.start(i);
                 }
             }
@@ -395,6 +403,7 @@ impl<R: Runtime> Engine<R> {
                 }
                 match current_uid {
                     Some(uid) if removed_uids.contains(&uid) => {
+                        self.note_ending("removed");
                         // Carry on with the first track after it that's still queued.
                         let old = self.current.unwrap_or(0);
                         let next = old - removed_before;
@@ -412,6 +421,7 @@ impl<R: Runtime> Engine<R> {
                 }
             }
             Cmd::Clear => {
+                self.note_ending("stopped");
                 self.queue.clear();
                 self.unshuffled = None;
                 self.stop();
@@ -827,7 +837,10 @@ impl<R: Runtime> Engine<R> {
     /// enough to count as listened to.
     fn follow_listen(&mut self) {
         let Some(q) = self.current.and_then(|c| self.queue.get(c)).cloned() else {
-            self.listen = None;
+            if let Some(old) = self.listen.take() {
+                self.end_listen(old);
+            }
+            self.ending = None;
             return;
         };
         let pos = self.position();
@@ -838,9 +851,13 @@ impl<R: Runtime> Engine<R> {
             None => true,
         };
         if fresh {
+            if let Some(old) = self.listen.take() {
+                self.end_listen(old);
+            }
             self.listen = Some(Listen {
                 uid: q.uid,
                 track_id: q.track_id,
+                duration: q.duration,
                 started_at: now_secs() - pos as i64,
                 heard: 0.0,
                 last_pos: pos,
@@ -864,6 +881,37 @@ impl<R: Runtime> Engine<R> {
             let _ = self
                 .app
                 .emit("player-listened", serde_json::json!({ "trackId": l.track_id, "playedAt": l.started_at }));
+        }
+        // A command that didn't end this song (e.g. Previous restarting it) leaves nothing behind.
+        self.ending = None;
+    }
+
+    /// Remember why the playing song is about to stop, and where, for the
+    /// listening history. The first reason in a burst of commands wins.
+    fn note_ending(&mut self, reason: &'static str) {
+        if self.listen.is_some() && self.ending.is_none() {
+            self.ending = Some((reason, self.position()));
+        }
+    }
+
+    /// Write a finished listen to the history. Songs that never actually
+    /// played (loaded paused, then skipped) aren't recorded.
+    fn end_listen(&mut self, l: Listen) {
+        if !l.announced {
+            return;
+        }
+        let (reason, position) = self.ending.take().unwrap_or(("finished", l.duration));
+        let end = db::ListenEnd {
+            track_id: l.track_id,
+            started_at: l.started_at,
+            ended_at: now_secs(),
+            position,
+            duration: l.duration,
+            heard: l.heard,
+            reason,
+        };
+        if let Ok(conn) = db::open(&self.db_path) {
+            let _ = db::record_listen(&conn, &end);
         }
     }
 
@@ -1031,6 +1079,48 @@ mod tests {
 
     fn item(id: i64, path: &std::path::Path, duration: f64) -> QItem {
         QItem { uid: 0, track_id: id, path: path.to_string_lossy().into_owned(), duration }
+    }
+
+    #[test]
+    #[ignore]
+    fn listening_history_records_how_songs_end() {
+        let dir = std::env::temp_dir().join(format!("hc-listens-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let wav = |name: &str, secs: f64| {
+            let p = dir.join(name);
+            write_wav(&p, 44100, (44100.0 * secs) as u32, |i| (i % 2000) as i16);
+            p
+        };
+        let (a, b, c) = (wav("a.wav", 3.0), wav("b.wav", 2.0), wav("c.wav", 3.0));
+        let rig = Rig::new(&dir);
+        let conn = db::open(&dir.join("library.db")).unwrap();
+        for p in [&a, &b, &c] {
+            conn.execute("INSERT INTO tracks (path, date_added) VALUES (?1, 0)", [p.to_string_lossy()]).unwrap();
+        }
+
+        // Skipped early, played to the end, then stopped partway.
+        rig.send(Cmd::Load(vec![item(1, &a, 3.0), item(2, &b, 2.0), item(3, &c, 3.0)], 0));
+        rig.playing(1, "track 1 to play");
+        std::thread::sleep(Duration::from_millis(500));
+        rig.send(Cmd::Next);
+        rig.playing(2, "next");
+        rig.playing(3, "track 3 to follow track 2");
+        std::thread::sleep(Duration::from_millis(800));
+        rig.send(Cmd::Clear);
+        rig.wait("player-queue", 2.0, "the stop", |q| q["current"].is_null());
+        std::thread::sleep(Duration::from_millis(300));
+
+        let rows: Vec<(i64, String, f64)> = conn
+            .prepare("SELECT track_id, reason, position FROM listens ORDER BY ended_at, rowid")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let reasons: Vec<(i64, &str)> = rows.iter().map(|(t, r, _)| (*t, r.as_str())).collect();
+        assert_eq!(reasons, [(1, "next"), (2, "finished"), (3, "stopped")], "{rows:?}");
+        assert!((0.3..1.5).contains(&rows[0].2), "skipped at {}", rows[0].2);
+        assert!((0.5..2.0).contains(&rows[2].2), "stopped at {}", rows[2].2);
     }
 
     #[test]

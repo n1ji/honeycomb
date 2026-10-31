@@ -1,4 +1,4 @@
-import { open } from "@tauri-apps/plugin-dialog";
+import { ask, open } from "@tauri-apps/plugin-dialog";
 import { api } from "../api";
 import { store } from "../store";
 import { fmtDate, h, toast } from "../util";
@@ -78,6 +78,35 @@ function lyricsToggle(): HTMLElement {
   const box = h("input", { type: "checkbox", checked: store.settings.lyricsOnline !== "off" });
   box.addEventListener("change", () => run(() => setSetting("lyricsOnline", box.checked ? "on" : "off")));
   return h("label", { class: "check" }, box, "Look up lyrics online");
+}
+
+/** The listening history switch, with how much is kept and a way to clear it. */
+function listeningSection(): HTMLElement[] {
+  const box = h("input", { type: "checkbox", checked: store.settings.listenLog !== "off" });
+  box.addEventListener("change", () => run(() => setSetting("listenLog", box.checked ? "on" : "off")));
+  const count = h("span", { class: "muted" });
+  const refresh = async () => {
+    const n = await api.listenCount();
+    count.textContent = `${n.toLocaleString()} song${n === 1 ? "" : "s"} recorded.`;
+  };
+  const clear = button("Clear history", () =>
+    run(async () => {
+      if (!(await ask("Delete the whole listening history? Play counts and ratings stay as they are.", { title: "Clear history", kind: "warning" }))) return;
+      await api.clearListens();
+      await refresh();
+    }),
+  );
+  void refresh();
+  return [
+    h("h3", {}, "Listening history"),
+    h("label", { class: "check" }, box, "Keep a listening history"),
+    h(
+      "p",
+      { class: "muted" },
+      "Which songs you play, when, and where in the song you skipped or stopped. It stays on this computer and isn't sent anywhere; later it will help make playlists that fit your taste.",
+    ),
+    h("div", { class: "row" }, count, clear),
+  ];
 }
 
 /** A dropdown bound to a layout setting. `get` maps settings to the selected value. */
@@ -345,6 +374,7 @@ export async function openSettings() {
       { class: "muted" },
       "Lyrics in the file or a .lrc file next to it are always used. Online lookup asks LRCLIB (lrclib.net, a free lyrics database) for the rest, sending the song's title, artist, album and length.",
     ),
+    ...listeningSection(),
     ...pluginsSection(),
     h("h3", {}, "Appearance"),
     h("label", { class: "field inline" }, h("span", {}, "Theme"), theme),
