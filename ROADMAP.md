@@ -85,6 +85,11 @@ Sign-in, scrobbling and the offline queue were done in October.
 
 - Sync loves both ways with the loved flag. (The loved flag isn't shown in the UI yet either.)
 - Optional: import play counts from Last.fm for tracks that have none locally.
+- Loves on ListenBrainz too, synced both ways like Last.fm loves.
+- Don't scrobble some music: leave out audiobooks, podcasts, or a genre or folder the user picks.
+- Rockbox scrobbling (moved up from Month 4): a UTC offset setting, so plays read from `playback.log` can be scrobbled.
+- Skip-aware smart rules, from the listening history: "skipped more than 3 times", "skipped in the first 30 seconds", "not heard in 6 months".
+- Listening stats: top artists, albums and songs by week, month or year, skip rate and listening time, all worked out on the computer from the listening history. Could become a year-end recap.
 - 🟡 Media keys and the system Now Playing controls (`media.rs`). Live in 0.1.1 and works on macOS; not tested on Windows or Linux, and media keys sometimes going to a browser tab isn't confirmed fixed.
 
 **Done when:** a week of daily listening shows up correctly on Last.fm, including songs played offline.
@@ -97,15 +102,21 @@ Sync itself was done in October. What's left:
 
 - Folder layout options (today it's always Artist/Album/NN Title).
 - The car-stereo test from "Done when".
+- Recognize a drive when it's plugged in (by its `.honeycomb-sync.json` manifest) and offer to sync it.
+- Preview before syncing: what will be added, replaced and removed, and the total size.
+- Fill the rest of the drive: top up the free space with favourites, by rating, play count or never heard.
+- Small covers for players: a resized `cover.jpg` in each album folder, since older players and Rockbox struggle with large embedded art.
 
 **Done when:** syncing 5 playlists to a USB stick plays correctly in a car stereo, and re-syncing after a change copies only the difference.
 
 ## Month 4 (February): sync, part 2
 
-Converting and reading Rockbox play counts were done in October.
+Converting and reading Rockbox play counts were done in October; Rockbox scrobbling moved to Month 2.
 
 - Android phones over MTP. This is hard on Mac, so check what's realistic early. If it isn't, fall back to "sync to a folder" plus a phone sync app.
-- Rockbox: scrobble the plays read from `playback.log`. Needs a UTC offset first (Rockbox logs local time).
+- Opus as a sync format: the best quality per megabyte for small players and phones.
+- AAC on Windows through the system's own encoder (Media Foundation), so AAC isn't macOS-only there.
+- Phone without MTP: a documented "sync to a folder" flow and a tested list of phone sync apps.
 
 **Done when:** a lossless library syncs to a small player as lossy files, and a phone works or the documented fallback does.
 
@@ -128,6 +139,13 @@ Lyrics were done in October.
 - A signed and notarized Mac build (needs the Apple account), and Linux packages on Flathub and/or the AUR.
 - Windows builds kept working, even though it isn't the main target.
 - A user guide covering migration, sync and Last.fm setup.
+- Library health view: missing cover art, missing genre or year, unreadable files, and likely duplicates (using `matching`).
+- Drag to reorder playlists and the play queue.
+- Crossfade as an option, off by default so gapless stays the default.
+- A mini player: a small window that stays on top.
+- A command palette (Cmd-K / Ctrl-K) to jump to any artist, album, playlist or setting.
+- Soft shadows and a little depth behind panels (no glass effects), and a cleanup script for contributors (`scripts/clean.sh`, dry run by default).
+- First step toward sound-based playlists: BPM detection in Honeycomb's own analysis code, filling a BPM column and smart rule.
 - Launch on Product Hunt with 1.0 (not before: the first launch gets the most attention). Prepare the gallery, the demo video, a maker's first comment, and early users who'll be around on launch day. Update the AlternativeTo listing and post to r/MacApps at the same time.
 
 **Done when:** a 1.0 beta is announced to Mac and Linux music library users.
