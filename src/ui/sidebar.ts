@@ -1,6 +1,6 @@
 import { artistOf, Filters, GroupFilter, store, View } from "../store";
 import { $, h } from "../util";
-import { addToPlaylist, clearInbox, importPlaylist, newPlaylist, openPlaylistMenu, run } from "./actions";
+import { addToPlaylist, clearInbox, importPlaylist, newPlaylist, openPlaylistMenu, openTrackMenu, run } from "./actions";
 import { onSidebarItems, sidebarItems } from "../plugins";
 import { openMenu } from "./menu";
 import { openSettings } from "./settings";
@@ -183,6 +183,23 @@ export function mountSidebar() {
           h("span", { class: "badge" }, g.count.toLocaleString()),
         );
         groupFilters.set(el, g.filters);
+        // Right-click: the track menu for the whole artist, album or genre (e.g. Shuffle).
+        el.addEventListener("contextmenu", (e) => {
+          e.preventDefault();
+          const f = g.filters;
+          const ids = store
+            .sortCache()
+            .libraryIds.filter((id) => {
+              const t = store.tracks.get(id)!;
+              return (
+                !t.inbox &&
+                (f.artist === undefined || artistOf(t) === f.artist) &&
+                (f.album === undefined || t.album === f.album) &&
+                (f.genre === undefined || t.genre === f.genre)
+              );
+            });
+          openTrackMenu(e.clientX, e.clientY, ids);
+        });
         return el;
       }),
       ...(rows.length ? [] : [h("div", { class: "nav-empty muted" }, q ? "No matches" : "Nothing here yet")]),

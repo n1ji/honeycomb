@@ -1,5 +1,5 @@
 import { api, Track } from "../api";
-import { SortKey, store } from "../store";
+import { artistOf, SortKey, store } from "../store";
 import { $, fmtDate, fmtTime, h, modKey, stars } from "../util";
 import { openTrackMenu, removeSelected } from "./actions";
 import { openColumnsCustomizer, setLayoutSetting } from "./customize";
@@ -119,6 +119,7 @@ export function mountTrackList() {
 
   rowsEl.addEventListener("mousedown", onRowMouseDown);
   rowsEl.addEventListener("dblclick", (e) => {
+    clearTimeout(goTimer);
     const i = rowIndex(e);
     if (i >= 0 && !(e.target as HTMLElement).dataset.star) store.playVisible(i);
   });
@@ -130,6 +131,7 @@ export function mountTrackList() {
     openTrackMenu(e.clientX, e.clientY);
   });
   rowsEl.addEventListener("dragstart", (e) => {
+    clearTimeout(goTimer);
     const i = rowIndex(e);
     if (i < 0 || !e.dataTransfer) return;
     if (!store.selection.has(i)) select(i, false, false);
@@ -332,13 +334,41 @@ function render() {
         cell = h("div", { class: "tl-cell num" }, playing ? h("span", { class: "eq" }, "♪") : n);
       } else {
         const text = c.render ? c.render(t, i) : String(t[c.key] ?? "");
-        cell = h("div", { class: `tl-cell ${c.cls ?? ""}`, title: text }, text);
+        // Artist and album names are links to that artist or album.
+        const link = LINKED.has(c.key) && text ? h("span", { class: "tl-link", "data-go": c.key }, text) : text;
+        cell = h("div", { class: `tl-cell ${c.cls ?? ""}`, title: text }, link);
       }
       row.append(cell);
     }
     out.push(row);
   }
   rowsEl.replaceChildren(...out);
+}
+
+/** Columns whose names jump to that artist or album when clicked. */
+const LINKED = new Set<string>(["artist", "albumArtist", "album"]);
+
+/** A pending jump, cancelled if the click turns into a double-click (play). */
+let goTimer = 0;
+
+/**
+ * Pressing an artist or album name jumps there. It runs on mousedown, not
+ * click: selecting the row redraws it, so a click event wouldn't reach the
+ * name anymore.
+ */
+function onLinkPress(e: MouseEvent, i: number) {
+  if (e.detail > 1) {
+    clearTimeout(goTimer);
+    return;
+  }
+  const link = (e.target as HTMLElement).closest<HTMLElement>(".tl-link");
+  if (!link || e.button !== 0 || modKey(e) || e.shiftKey) return;
+  const t = store.visible[i];
+  if (!t) return;
+  const artist = artistOf(t);
+  const filters = link.dataset.go === "album" ? { artist, album: t.album } : { artist };
+  clearTimeout(goTimer);
+  goTimer = window.setTimeout(() => void store.showFiltered(filters), 250);
 }
 
 function rowIndex(e: Event): number {
@@ -383,6 +413,7 @@ async function onRowMouseDown(e: MouseEvent) {
     store.updateTracks(ids.map((id) => ({ ...store.tracks.get(id)!, rating })));
     return;
   }
+  onLinkPress(e, i);
   if (e.button === 2 && store.selection.has(i)) return;
   // Keep a multi-selection intact when starting a drag.
   if (e.button === 0 && store.selection.has(i) && !modKey(e) && !e.shiftKey) {

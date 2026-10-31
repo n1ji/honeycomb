@@ -1634,6 +1634,43 @@ textarea.input {
   font-size: 0.9em;
 }
 
+.setup-progress {
+  margin-right: auto;
+  align-self: center;
+}
+
+.setup-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.setup-choice:hover {
+  background: var(--hover);
+}
+
+.setup-choice input {
+  margin-top: 3px;
+}
+
+.setup-choice > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.setup-facts {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 .swatches {
   display: flex;
   gap: 6px;
@@ -1860,4 +1897,106 @@ input[type="color"] {
   border-radius: 1px;
   background: var(--accent);
   pointer-events: none;
+}
+
+/* Artist and album names in the track list jump there when clicked. */
+.tl-link {
+  cursor: pointer;
+}
+
+.tl-link:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* ---------- motion ----------
+   Short and quiet: things ease in rather than snap. The track list is left
+   alone so scrolling stays fast with big libraries. */
+
+:root {
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --t-fast: 120ms;
+  --t: 180ms;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+}
+
+@keyframes fade-out {
+  to { opacity: 0; }
+}
+
+@keyframes rise-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+}
+
+@keyframes sink-out {
+  to { opacity: 0; transform: translateY(4px) scale(0.98); }
+}
+
+@keyframes pop-in {
+  from { opacity: 0; transform: scale(0.96); }
+}
+
+@keyframes step-in {
+  from { opacity: 0; transform: translateX(var(--step-from, 14px)); }
+}
+
+.backdrop {
+  animation: fade-in var(--t) var(--ease-out);
+}
+
+.backdrop .modal {
+  animation: rise-in var(--t) var(--ease-out);
+}
+
+.backdrop.closing {
+  animation: fade-out var(--t-fast) ease-in forwards;
+  pointer-events: none;
+}
+
+.backdrop.closing .modal {
+  animation: sink-out var(--t-fast) ease-in forwards;
+}
+
+.menu,
+.menu-item:hover > .submenu {
+  animation: pop-in var(--t-fast) var(--ease-out);
+  transform-origin: top left;
+}
+
+.btn,
+.input,
+.nav-item,
+.pane-item,
+.setup-choice {
+  transition:
+    background-color var(--t-fast) ease,
+    border-color var(--t-fast) ease,
+    color var(--t-fast) ease,
+    opacity var(--t-fast) ease,
+    transform var(--t-fast) ease;
+}
+
+.btn:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+/* The setup keeps one height, so steps don't make the dialog jump. */
+.modal.setup .modal-body {
+  min-height: 320px;
+}
+
+.modal-body.step-in {
+  animation: step-in var(--t) var(--ease-out);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    transition-duration: 1ms !important;
+  }
 }

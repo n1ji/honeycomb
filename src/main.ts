@@ -9,6 +9,7 @@ import { mountBrowser, mountToolbar } from "./ui/browser";
 import { mountNowPlaying, mountPlayerBar } from "./ui/playerbar";
 import { applyLayout, mountSplitters } from "./ui/layout";
 import { applyTheme, openSettings } from "./ui/settings";
+import { needsSetup, openSetup } from "./ui/setup";
 import { mountSidebar } from "./ui/sidebar";
 import { mountTrackList } from "./ui/tracklist";
 import "./styles.css";
@@ -103,7 +104,8 @@ async function main() {
   // Pick up files changed while the app was closed.
   const folders = await api.getFolders();
   if (folders.length) api.rescan();
-  else if (store.tracks.size === 0) openSettings();
+  if (needsSetup()) void openSetup();
+  else if (!folders.length && store.tracks.size === 0) openSettings();
 
   window.addEventListener("keydown", (e) => {
     const target = e.target as HTMLElement;

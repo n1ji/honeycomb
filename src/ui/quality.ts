@@ -67,7 +67,7 @@ export function stages(t: Track, sig: Signal | null, volume: number): Stage[] {
   });
 
   if (!out) {
-    list.push({ state: "info", title: "Output closed", detail: "It opens again when playback starts." });
+    list.push({ state: "info", title: "Output not open yet", detail: "Shown once the song starts playing." });
     return list;
   }
 

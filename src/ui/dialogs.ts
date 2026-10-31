@@ -20,9 +20,16 @@ export function modal(title: string, opts: { wide?: boolean; onCancel?: () => vo
       cancel();
     }
   };
+  let closed = false;
   const close = () => {
-    backdrop.remove();
+    if (closed) return;
+    closed = true;
     window.removeEventListener("keydown", onKey, true);
+    // Fade out, then go; the timeout covers a missed animationend.
+    backdrop.classList.add("closing");
+    const done = () => backdrop.remove();
+    backdrop.addEventListener("animationend", done, { once: true });
+    window.setTimeout(done, 300);
   };
   const cancel = () => {
     close();

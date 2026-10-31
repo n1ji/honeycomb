@@ -95,7 +95,9 @@ struct Tick {
 struct Signal {
     track_id: i64,
     source: Option<kaseki::SourceInfo>,
-    /// `None` while the output is closed (paused for a while, or no device).
+    /// The output this song plays through. While the output is closed (paused
+    /// for a while) it stays what it was for the same song; `None` until the
+    /// song has played, or with no device.
     output: Option<OutputInfo>,
 }
 
@@ -818,12 +820,20 @@ impl<R: Runtime> Engine<R> {
             Signal {
                 track_id: q.track_id,
                 source: self.probed.as_ref().and_then(|p| p.1.clone()),
-                output: self.out.as_ref().map(|o| OutputInfo {
-                    device: o.device.clone(),
-                    rate: o.rate,
-                    channels: o.channels,
-                    format: o.format.clone(),
-                }),
+                output: self
+                    .out
+                    .as_ref()
+                    .map(|o| OutputInfo {
+                        device: o.device.clone(),
+                        rate: o.rate,
+                        channels: o.channels,
+                        format: o.format.clone(),
+                    })
+                    // Closed to save power: the song still plays through the
+                    // same output when it resumes, so keep showing it.
+                    .or_else(|| {
+                        self.last_signal.as_ref().filter(|s| s.track_id == q.track_id).and_then(|s| s.output.clone())
+                    }),
             }
         });
         if !force && sig == self.last_signal {

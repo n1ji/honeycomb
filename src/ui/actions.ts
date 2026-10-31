@@ -29,6 +29,7 @@ export function openTrackMenu(x: number, y: number, group?: number[]) {
 
   const items: MenuItem[] = [
     { label: "Play", action: () => run(() => api.load(ids, 0)) },
+    ...(ids.length > 1 ? [{ label: "Shuffle", action: () => run(() => api.load(shuffled(ids), 0)) }] : []),
     { label: "Play next", action: () => run(() => api.enqueue(ids, true)) },
     { label: "Add to queue", action: () => run(() => api.enqueue(ids, false)) },
     SEP,
@@ -69,6 +70,16 @@ export function openTrackMenu(x: number, y: number, group?: number[]) {
     items.push(SEP, { label: "Remove from playlist", action: () => removeSelected() });
   }
   openMenu(x, y, items);
+}
+
+/** A shuffled copy (Fisher-Yates), for playing a whole artist or album in random order. */
+function shuffled(ids: number[]): number[] {
+  const out = [...ids];
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
 }
 
 /** Add Inbox tracks to the library (all of them when `ids` is null). */
