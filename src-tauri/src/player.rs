@@ -1094,6 +1094,7 @@ mod tests {
         let (a, b, c) = (wav("a.wav", 3.0), wav("b.wav", 2.0), wav("c.wav", 3.0));
         let rig = Rig::new(&dir);
         let conn = db::open(&dir.join("library.db")).unwrap();
+        db::set_setting(&conn, "listenLog", "on").unwrap();
         for p in [&a, &b, &c] {
             conn.execute("INSERT INTO tracks (path, date_added) VALUES (?1, 0)", [p.to_string_lossy()]).unwrap();
         }

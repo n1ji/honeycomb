@@ -308,11 +308,11 @@ pub struct ListenEnd<'a> {
     pub reason: &'a str,
 }
 
-/// Add a song to the listening history, unless it's switched off in Settings.
+/// Add a song to the listening history, if the user has turned it on.
 pub fn record_listen(conn: &Connection, l: &ListenEnd) -> Result<()> {
-    let off: Option<String> =
+    let on: Option<String> =
         conn.query_row("SELECT value FROM settings WHERE key = 'listenLog'", [], |r| r.get(0)).optional()?;
-    if off.as_deref() == Some("off") {
+    if on.as_deref() != Some("on") {
         return Ok(());
     }
     let id: String = (0..16).map(|_| format!("{:02x}", rand::random::<u8>())).collect();
@@ -383,11 +383,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn listening_history_can_be_switched_off_and_cleared() {
+    fn listening_history_is_off_until_turned_on() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute("INSERT INTO tracks (path, date_added) VALUES ('a', 0)", []).unwrap();
         let end = ListenEnd { track_id: 1, started_at: 10, ended_at: 20, position: 8.5, duration: 200.0, heard: 8.5, reason: "next" };
+        record_listen(&conn, &end).unwrap();
+        assert_eq!(listen_count(&conn).unwrap(), 0, "nothing is recorded before the user agrees");
+        set_setting(&conn, "listenLog", "on").unwrap();
         record_listen(&conn, &end).unwrap();
         record_listen(&conn, &end).unwrap();
         assert_eq!(listen_count(&conn).unwrap(), 2, "each listen gets its own id");

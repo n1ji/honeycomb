@@ -82,7 +82,7 @@ function lyricsToggle(): HTMLElement {
 
 /** The listening history switch, with how much is kept and a way to clear it. */
 function listeningSection(): HTMLElement[] {
-  const box = h("input", { type: "checkbox", checked: store.settings.listenLog !== "off" });
+  const box = h("input", { type: "checkbox", checked: store.settings.listenLog === "on" });
   box.addEventListener("change", () => run(() => setSetting("listenLog", box.checked ? "on" : "off")));
   const count = h("span", { class: "muted" });
   const refresh = async () => {
@@ -103,7 +103,7 @@ function listeningSection(): HTMLElement[] {
     h(
       "p",
       { class: "muted" },
-      "Which songs you play, when, and where in the song you skipped or stopped. It stays on this computer and isn't sent anywhere; later it will help make playlists that fit your taste.",
+      "Off until you turn it on. Records which songs you play, when, and where in the song you skipped or stopped. It stays on this computer and isn't sent anywhere. Playlists that learn your taste will need it later.",
     ),
     h("div", { class: "row" }, count, clear),
   ];
