@@ -13,7 +13,7 @@ This is a plan, not a promise. Each month has a "done when" line. Whatever slips
 
 ---
 
-## Where things stand (reviewed 2026-10-31)
+## Where things stand (reviewed 2026-11-01)
 
 October went faster than planned: most of Months 1–4 is already built. Every item in this file carries one of these marks:
 
@@ -30,8 +30,8 @@ To check yourself: `git log --oneline v0.1.1..origin/dev` lists what's on dev bu
 
 These come first, ahead of the month order below:
 
-1. **Remember unreadable files (#6, #2).** Store each file the scanner can't read with its mtime and the error, skip it on rescans until it changes, and list them in Settings → Library with a "Read again" button. The list also shows which formats fail and why.
-2. **Show the loved flag.** A heart in the track list and player bar, and Love / Unlove in the context menu. Needed before loves sync with Last.fm.
+1. 🟡 **Remember unreadable files (#6, #2).** *In progress: built, not committed yet.* Store each file the scanner can't read with its mtime and the error, skip it on rescans until it changes, and list them in Settings → Library with a "Read again" button. The list also shows which formats fail and why.
+2. 🟡 **Show the loved flag.** *In progress: built, not committed yet.* A heart in the track list and player bar, and Love / Unlove in the context menu. Needed before loves sync with Last.fm.
 3. **Linux on release tags.** After one test on a real distro, add Linux to the tag default in `.github/workflows/build.yml` (today it only builds on manual runs).
 4. **ReplayGain.** Read track and album gain and peak tags, apply them in Kaseki's gain stage (switching exactly at the gapless marker), with a setting (Off / Track / Album), clipping prevention from the peak, and a line in the signal path view.
 5. **Watch library folders.** Use the `notify` crate to start the quick rescan a moment after files change, so new music lands in the Inbox without "Rescan now". If a scan is already running, run another one when it finishes.
@@ -83,7 +83,7 @@ Everything finished so far, including items that were planned for later months a
 
 Sign-in, scrobbling and the offline queue were done in October.
 
-- Sync loves both ways with the loved flag. (The loved flag isn't shown in the UI yet either.)
+- Sync loves both ways with the loved flag. (Hearts in the UI are being built, see "Next up".)
 - Optional: import play counts from Last.fm for tracks that have none locally.
 - Loves on ListenBrainz too, synced both ways like Last.fm loves.
 - Don't scrobble some music: leave out audiobooks, podcasts, or a genre or folder the user picks.
@@ -128,7 +128,7 @@ Lyrics were done in October.
 - An album art grid view.
 - ReplayGain (track and album volume leveling).
 - A basic equalizer.
-- 🟡 Fix: changing the queue in the last 2 seconds of a track (#3) is fixed in code (live in 0.1.1) and needs a listening test. Still open: unreadable files being re-read on every rescan (#6), and why 64 files fail to read (#2).
+- 🟡 Fix: changing the queue in the last 2 seconds of a track (#3) is fixed in code (live in 0.1.1) and needs a listening test. Unreadable files being re-read on every rescan (#6) and why 64 files fail to read (#2) are in progress, see "Next up".
 
 **Done when:** Honeycomb works as someone's only player for two weeks without them going back.
 
