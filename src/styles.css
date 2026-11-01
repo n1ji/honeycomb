@@ -723,6 +723,31 @@ body.resizing {
   opacity: 0.5;
 }
 
+.tl-cell.loved {
+  text-align: center;
+}
+
+.heart,
+.np-heart {
+  color: var(--border);
+  cursor: pointer;
+}
+
+.heart.on,
+.np-heart.on {
+  color: var(--accent);
+}
+
+/* Empty hearts stay out of the way until the row is hovered. */
+.tl-row:not(:hover) .heart:not(.on) {
+  opacity: 0;
+}
+
+.tl-row:hover .heart:not(.on) {
+  color: var(--muted);
+  opacity: 0.5;
+}
+
 .eq {
   color: var(--accent);
 }
@@ -813,11 +838,20 @@ body.resizing {
   color: var(--accent-text);
 }
 
+.np-marks {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0;
+}
+
 .np-rating {
-  display: block;
   color: var(--border);
   letter-spacing: 2px;
-  margin: 4px 0;
+}
+
+.np-heart:hover {
+  color: var(--accent);
 }
 
 .np-tech {
@@ -1613,6 +1647,16 @@ textarea.input {
 
 .ignored-all {
   flex-shrink: 0;
+}
+
+.unreadable-item {
+  flex: 1;
+  min-width: 0;
+}
+
+.unreadable-why {
+  font-size: 0.9em;
+  white-space: normal;
 }
 
 /* Shown while hovering a row. */

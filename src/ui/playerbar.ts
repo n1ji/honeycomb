@@ -1,12 +1,12 @@
 import { api, artUrl, Repeat, Track } from "../api";
 import { store } from "../store";
-import { $, fmtTime, h, stars } from "../util";
+import { $, fmtTime, h, heart, stars } from "../util";
 import { saveSetting } from "./layout";
 import { openArtViewer } from "./artviewer";
 import { openPlayerBarCustomizer } from "./customize";
 import { icon, setIcon } from "./icons";
 import { mountLyrics } from "./lyrics";
-import { run } from "./actions";
+import { run, setLoved } from "./actions";
 import { revealPlaying } from "./tracklist";
 import { openMenu } from "./menu";
 import { mountQualityBadge } from "./quality";
@@ -228,7 +228,7 @@ export function mountNowPlaying() {
         h("div", { class: "np-title" }, t.title),
         h("div", { class: "np-artist" }, t.artist),
         h("div", { class: "np-album" }, [t.album, t.year].filter(Boolean).join(" · ")),
-        stars(t.rating, "np-rating"),
+        h("div", { class: "np-marks" }, stars(t.rating, "np-rating"), loveButton(t)),
         h(
           "div",
           { class: "np-tech muted" },
@@ -268,4 +268,11 @@ export function mountNowPlaying() {
   store.on("tracks", render);
   store.on("settings", render);
   render();
+}
+
+/** The playing track's heart; clicking it loves or unloves the track. */
+function loveButton(t: Track): HTMLElement {
+  const el = heart(t.loved, "np-heart");
+  el.addEventListener("click", () => run(() => setLoved([t.id], !t.loved)));
+  return el;
 }

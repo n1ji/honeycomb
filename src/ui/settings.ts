@@ -244,6 +244,63 @@ async function openIgnored() {
   render();
 }
 
+/** "Unreadable files (N)…", shown only when there are some. */
+function unreadableButton(): HTMLElement {
+  const b = button("Unreadable files…", () => run(openUnreadable));
+  b.style.display = "none";
+  void api.unreadableFiles().then((files) => {
+    if (!files.length) return;
+    b.textContent = `Unreadable files (${files.length.toLocaleString()})…`;
+    b.style.display = "";
+  });
+  return b;
+}
+
+/** Files the scanner couldn't read, with the reason. Rescans skip them until the file changes. */
+async function openUnreadable() {
+  const files = await api.unreadableFiles();
+  const m = modal("Files that couldn't be read", { wide: true });
+  const list = h(
+    "ul",
+    { class: "folders ignored-list" },
+    ...files.map((f) => {
+      const parts = f.path.split(/[\\/]/);
+      const copy = h("button", { class: "btn ignored-copy", type: "button", title: "Copy the full path" }, "Copy path");
+      copy.addEventListener("click", () =>
+        run(async () => {
+          await navigator.clipboard.writeText(f.path);
+          toast("Path copied");
+        }),
+      );
+      return h(
+        "li",
+        { title: f.path },
+        h(
+          "div",
+          { class: "unreadable-item" },
+          h("div", { class: "ignored-row" }, h("span", {}, parts[parts.length - 1] || f.path), h("span", { class: "muted" }, parts[parts.length - 2] ?? "")),
+          h("div", { class: "muted unreadable-why" }, f.error),
+        ),
+        copy,
+      );
+    }),
+  );
+  m.body.append(
+    h("p", { class: "muted" }, "Honeycomb couldn't read these files, so they aren't in your library. Rescans skip them until a file changes, for example when a download finishes or you replace it."),
+    list,
+  );
+  m.footer.append(
+    button("Close", () => m.close()),
+    button("Try all again", () =>
+      run(async () => {
+        await api.retryUnreadable();
+        m.close();
+      }),
+      true,
+    ),
+  );
+}
+
 export async function openSettings() {
   const m = modal("Settings", { wide: true });
 
@@ -361,6 +418,7 @@ export async function openSettings() {
       button("Add folder…", addFolder, true),
       button("Rescan now", () => run(api.rescan)),
       button("Ignored files…", () => run(openIgnored)),
+      unreadableButton(),
       button("Import from another player…", () => {
         m.close();
         openImporter();

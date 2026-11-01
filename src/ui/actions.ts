@@ -48,6 +48,10 @@ export function openTrackMenu(x: number, y: number, group?: number[]) {
         action: () => run(() => setRating(ids, r)),
       })),
     },
+    (() => {
+      const loved = ids.every((id) => store.tracks.get(id)?.loved);
+      return { label: loved ? "Unlove" : "Love", action: () => run(() => setLoved(ids, !loved)) };
+    })(),
     { label: ids.length > 1 ? `Edit tags (${ids.length} tracks)…` : "Edit tags…", action: () => openTagEditor(ids.map((id) => store.tracks.get(id)!)) },
     {
       label: "Show in folder",
@@ -113,6 +117,11 @@ export async function ignoreInboxTracks(ids: number[]) {
 async function setRating(ids: number[], rating: number) {
   await api.setRating(ids, rating);
   store.updateTracks(ids.map((id) => ({ ...store.tracks.get(id)!, rating })));
+}
+
+export async function setLoved(ids: number[], loved: boolean) {
+  await api.setLoved(ids, loved);
+  store.updateTracks(ids.map((id) => ({ ...store.tracks.get(id)!, loved })));
 }
 
 /** Remove the selected rows from the queue or the open manual playlist. */

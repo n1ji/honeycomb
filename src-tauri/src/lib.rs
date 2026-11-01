@@ -110,6 +110,15 @@ fn set_rating(state: State<AppState>, ids: Vec<i64>, rating: u8) -> CmdResult<()
     Ok(())
 }
 
+#[tauri::command]
+fn set_loved(state: State<AppState>, ids: Vec<i64>, loved: bool) -> CmdResult<()> {
+    let conn = state.conn();
+    for id in ids {
+        conn.execute("UPDATE tracks SET loved = ?2 WHERE id = ?1", rusqlite::params![id, loved]).map_err(err)?;
+    }
+    Ok(())
+}
+
 /// Add Inbox tracks to the library (all of them when `ids` is None).
 #[tauri::command]
 fn clear_inbox(state: State<AppState>, ids: Option<Vec<i64>>) -> CmdResult<()> {
@@ -147,6 +156,29 @@ fn ignored_files(state: State<AppState>) -> CmdResult<Vec<IgnoredFile>> {
 #[tauri::command]
 fn unignore_files(app: AppHandle, state: State<AppState>, paths: Vec<String>) -> CmdResult<()> {
     db::unignore(&mut state.conn(), &paths).map_err(err)?;
+    scanner::spawn_scan(app, state.db_path.clone(), state.scanning.clone());
+    Ok(())
+}
+
+#[derive(serde::Serialize)]
+struct UnreadableFile {
+    path: String,
+    error: String,
+}
+
+#[tauri::command]
+fn unreadable_files(state: State<AppState>) -> CmdResult<Vec<UnreadableFile>> {
+    Ok(db::unreadable(&state.conn())
+        .map_err(err)?
+        .into_iter()
+        .map(|(path, error)| UnreadableFile { path, error })
+        .collect())
+}
+
+/// Try every unreadable file again with a rescan.
+#[tauri::command]
+fn retry_unreadable(app: AppHandle, state: State<AppState>) -> CmdResult<()> {
+    db::forget_unreadable(&state.conn()).map_err(err)?;
     scanner::spawn_scan(app, state.db_path.clone(), state.scanning.clone());
     Ok(())
 }
@@ -742,6 +774,9 @@ pub fn run() {
             remove_folder,
             rescan,
             set_rating,
+            set_loved,
+            unreadable_files,
+            retry_unreadable,
             clear_inbox,
             ignore_inbox_tracks,
             ignored_files,

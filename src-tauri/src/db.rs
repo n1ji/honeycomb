@@ -69,6 +69,8 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         );
         -- Files removed from the Inbox that scans skip until un-ignored.
         CREATE TABLE IF NOT EXISTS ignored (path TEXT PRIMARY KEY, ignored_at INTEGER NOT NULL);
+        -- Files the tag reader failed on, skipped by scans until their mtime changes.
+        CREATE TABLE IF NOT EXISTS unreadable (path TEXT PRIMARY KEY, mtime INTEGER NOT NULL, error TEXT NOT NULL);
         -- Listening history: one row per song played, however it ended. Ids are
         -- made on the device, so logs from several devices merge without doubles.
         CREATE TABLE IF NOT EXISTS listens (
@@ -375,6 +377,19 @@ pub fn unignore(conn: &mut Connection, paths: &[String]) -> Result<()> {
         tx.execute("DELETE FROM ignored WHERE path = ?1", [p])?;
     }
     tx.commit()?;
+    Ok(())
+}
+
+/// Files that couldn't be read, by path: (path, why).
+pub fn unreadable(conn: &Connection) -> Result<Vec<(String, String)>> {
+    let mut stmt = conn.prepare("SELECT path, error FROM unreadable ORDER BY path")?;
+    let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+/// Forget every unreadable file, so the next scan tries them all again.
+pub fn forget_unreadable(conn: &Connection) -> Result<()> {
+    conn.execute("DELETE FROM unreadable", [])?;
     Ok(())
 }
 

@@ -1,7 +1,7 @@
 import { api, Track } from "../api";
 import { artistOf, SortKey, store } from "../store";
-import { $, fmtDate, fmtTime, h, modKey, stars } from "../util";
-import { openTrackMenu, removeSelected } from "./actions";
+import { $, fmtDate, fmtTime, h, heart, modKey, stars } from "../util";
+import { openTrackMenu, removeSelected, run, setLoved } from "./actions";
 import { openColumnsCustomizer, setLayoutSetting } from "./customize";
 import { dragFrom, saveSetting } from "./layout";
 import { MenuItem, openMenu, SEP } from "./menu";
@@ -31,6 +31,7 @@ export const COLS: Col[] = [
   { key: "year", label: "Year", width: "52px", cls: "num", render: (t) => (t.year ? String(t.year) : "") },
   { key: "genre", label: "Genre", min: 44, grow: 0.7 },
   { key: "duration", label: "Time", width: "56px", cls: "num", render: (t) => fmtTime(t.duration) },
+  { key: "loved", label: "♥\uFE0E", menuLabel: "Loved", width: "32px" },
   { key: "rating", label: "Rating", width: "90px" },
   { key: "playCount", label: "Plays", width: "50px", cls: "num", render: (t) => (t.playCount ? String(t.playCount) : "") },
   { key: "albumArtist", label: "Album Artist", min: 60, grow: 1.2 },
@@ -51,7 +52,7 @@ export const COLS: Col[] = [
   { key: "comment", label: "Comment", min: 60, grow: 1 },
 ];
 
-export const DEFAULT_COLUMNS = ["trackNo", "title", "artist", "album", "year", "genre", "duration", "rating", "playCount"];
+export const DEFAULT_COLUMNS = ["trackNo", "title", "artist", "album", "year", "genre", "duration", "loved", "rating", "playCount"];
 const COLS_SHOWN = "layout.columnsShown";
 const BY_KEY = new Map(COLS.map((c) => [c.key as string, c]));
 
@@ -329,6 +330,8 @@ function render() {
       let cell: HTMLElement;
       if (c.key === "rating") {
         cell = h("div", { class: "tl-cell rating" }, stars(t.rating));
+      } else if (c.key === "loved") {
+        cell = h("div", { class: "tl-cell loved" }, heart(t.loved));
       } else if (c.key === "trackNo") {
         const n = pos ? String(store.visibleSource[i] + 1) : t.trackNo ? String(t.trackNo) : "";
         cell = h("div", { class: "tl-cell num" }, playing ? h("span", { class: "eq" }, "♪") : n);
@@ -411,6 +414,13 @@ async function onRowMouseDown(e: MouseEvent) {
     const ids = store.selection.has(i) ? store.selectedIds() : [t.id];
     await api.setRating(ids, rating);
     store.updateTracks(ids.map((id) => ({ ...store.tracks.get(id)!, rating })));
+    return;
+  }
+  if (starEl.dataset.love !== undefined && e.button === 0) {
+    // Like stars: clicking a selected row's heart sets all selected rows to the opposite of this one.
+    const t = store.visible[i];
+    const ids = store.selection.has(i) ? store.selectedIds() : [t.id];
+    await run(() => setLoved(ids, !t.loved));
     return;
   }
   onLinkPress(e, i);

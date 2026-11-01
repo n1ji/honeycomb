@@ -62,6 +62,12 @@ export function stars(rating: number, cls = "stars"): HTMLElement {
   return el;
 }
 
+/** A heart that's filled when the track is loved. `data-love` makes it clickable. */
+export function heart(loved: boolean, cls = "heart"): HTMLElement {
+  // U+FE0E keeps it a text glyph, so it takes the accent colour instead of turning into an emoji.
+  return h("span", { class: `${cls}${loved ? " on" : ""}`, "data-love": "", title: loved ? "Loved" : "Love" }, "♥\uFE0E");
+}
+
 /** Text form of a 0-10 rating, e.g. "★★½". */
 export function starsText(rating: number): string {
   return "★".repeat(Math.floor(rating / 2)) + (rating % 2 ? "½" : "");

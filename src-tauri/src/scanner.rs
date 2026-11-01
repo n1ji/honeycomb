@@ -79,12 +79,22 @@ pub(crate) fn scan(db_path: &Path, progress: &dyn Fn(Progress)) -> Result<Finish
         rows.collect::<rusqlite::Result<_>>()?
     };
 
+    // Files that failed before are skipped until their mtime changes.
+    let unreadable: HashMap<String, i64> = {
+        let mut stmt = conn.prepare("SELECT path, mtime FROM unreadable")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+        rows.collect::<rusqlite::Result<_>>()?
+    };
+
     let walked = started.elapsed();
     let total = files.len();
     let seen: HashSet<String> = files.iter().map(|p| p.to_string_lossy().into_owned()).collect();
     let todo: Vec<&PathBuf> = files
         .iter()
-        .filter(|p| known.get(p.to_string_lossy().as_ref()) != Some(&meta::file_mtime(p)))
+        .filter(|p| {
+            let (path, mtime) = (p.to_string_lossy(), meta::file_mtime(p));
+            known.get(path.as_ref()) != Some(&mtime) && unreadable.get(path.as_ref()) != Some(&mtime)
+        })
         .collect();
 
     // Reading tags is the slow part, so it runs on several threads while this
@@ -120,8 +130,8 @@ pub(crate) fn scan(db_path: &Path, progress: &dyn Fn(Progress)) -> Result<Finish
                         meta::read_track_with(path, &has_folder_art)
                     }));
                     let result = match read {
-                        Ok(r) => r.ok(),
-                        Err(_) => None,
+                        Ok(r) => r.map_err(|e| why_unreadable(path, &e)),
+                        Err(_) => Err("The tag reader crashed on this file".to_string()),
                     };
                     if tx.send((path.to_string_lossy().into_owned(), result)).is_err() {
                         break;
@@ -138,7 +148,7 @@ pub(crate) fn scan(db_path: &Path, progress: &dyn Fn(Progress)) -> Result<Finish
         for (path, track) in rx {
             let w = std::time::Instant::now();
             match track {
-                Some(t) => {
+                Ok(t) => {
                     let id = db::upsert_track(&conn, &t)?;
                     let is_new = !known.contains_key(&t.path);
                     let to_inbox = is_new && established.iter().any(|f| Path::new(&t.path).starts_with(f));
@@ -149,9 +159,18 @@ pub(crate) fn scan(db_path: &Path, progress: &dyn Fn(Progress)) -> Result<Finish
                     if is_new {
                         fresh.push((id, to_inbox));
                     }
+                    if unreadable.contains_key(&t.path) {
+                        conn.execute("DELETE FROM unreadable WHERE path = ?1", [&t.path])?;
+                    }
                     changed += 1;
                 }
-                None => errors += 1,
+                Err(why) => {
+                    conn.execute(
+                        "INSERT OR REPLACE INTO unreadable (path, mtime, error) VALUES (?1, ?2, ?3)",
+                        rusqlite::params![path, meta::file_mtime(Path::new(&path)), why],
+                    )?;
+                    errors += 1;
+                }
             }
             done += 1;
             in_batch += 1;
@@ -202,10 +221,21 @@ pub(crate) fn scan(db_path: &Path, progress: &dyn Fn(Progress)) -> Result<Finish
     for p in &stale {
         conn.execute("DELETE FROM tracks WHERE path = ?1", [p])?;
     }
+    for p in unreadable.keys().filter(|p| !seen.contains(*p)) {
+        conn.execute("DELETE FROM unreadable WHERE path = ?1", [p])?;
+    }
     conn.execute("UPDATE folders SET scanned = 1", [])?;
     conn.execute_batch("COMMIT")?;
 
     Ok(Finished { added_or_updated: changed, removed: stale.len(), errors, inboxed })
+}
+
+/// A short reason a file couldn't be read, for Settings → Library.
+fn why_unreadable(path: &Path, e: &anyhow::Error) -> String {
+    match std::fs::metadata(path) {
+        Ok(m) if m.len() == 0 => "The file is empty (0 bytes), maybe an unfinished download".to_string(),
+        _ => e.root_cause().to_string(),
+    }
 }
 
 /// Pair tracks whose files vanished with tracks first found in this scan that
@@ -405,6 +435,53 @@ mod tests {
         let f = scan(&db_path, &quiet).unwrap();
         assert_eq!((f.added_or_updated, f.inboxed), (1, 1));
         assert_eq!(inbox_names(&conn), ["junk.wav"]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn unreadable_files_are_remembered_until_they_change() {
+        let root = std::env::temp_dir().join(format!("hc-unreadable-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let music = root.join("music");
+        std::fs::create_dir_all(&music).unwrap();
+        write_wav(&music.join("good.wav"));
+        let broken = music.join("broken.wav");
+        std::fs::write(&broken, b"").unwrap();
+        let db_path = root.join("library.db");
+        let conn = db::open(&db_path).unwrap();
+        db::migrate(&conn).unwrap();
+        conn.execute("INSERT INTO folders (path) VALUES (?1)", [music.to_string_lossy()]).unwrap();
+        let quiet = |_: Progress| {};
+
+        // The broken file is counted once and remembered with the reason.
+        let f = scan(&db_path, &quiet).unwrap();
+        assert_eq!((f.added_or_updated, f.errors), (1, 1));
+        let bad = db::unreadable(&conn).unwrap();
+        assert_eq!(bad.len(), 1);
+        assert_eq!(bad[0].0, broken.to_string_lossy());
+        assert!(bad[0].1.contains("empty"), "reason: {}", bad[0].1);
+
+        // Rescans don't read it again while it's unchanged.
+        let f = scan(&db_path, &quiet).unwrap();
+        assert_eq!((f.added_or_updated, f.errors), (0, 0));
+        assert_eq!(db::unreadable(&conn).unwrap().len(), 1);
+
+        // Once the file changes (a finished download, a fix), it's read again.
+        write_wav(&broken);
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
+        std::fs::File::options().write(true).open(&broken).unwrap().set_modified(later).unwrap();
+        let f = scan(&db_path, &quiet).unwrap();
+        assert_eq!((f.added_or_updated, f.errors), (1, 0));
+        assert!(db::unreadable(&conn).unwrap().is_empty());
+
+        // A broken file that's deleted is forgotten.
+        let gone = music.join("gone.mp3");
+        std::fs::write(&gone, b"not audio").unwrap();
+        scan(&db_path, &quiet).unwrap();
+        assert_eq!(db::unreadable(&conn).unwrap().len(), 1);
+        std::fs::remove_file(&gone).unwrap();
+        scan(&db_path, &quiet).unwrap();
+        assert!(db::unreadable(&conn).unwrap().is_empty());
         let _ = std::fs::remove_dir_all(&root);
     }
 }

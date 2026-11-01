@@ -32,6 +32,12 @@ export interface Track {
 }
 
 /** A file removed from the Inbox that scans skip. */
+/** A file the scanner couldn't read, and why. */
+export interface UnreadableFile {
+  path: string;
+  error: string;
+}
+
 export interface IgnoredFile {
   path: string;
   /** Unix seconds. */
@@ -206,6 +212,7 @@ export const api = {
   removeFolder: (path: string) => invoke<void>("remove_folder", { path }),
   rescan: () => invoke<void>("rescan"),
   setRating: (ids: number[], rating: number) => invoke<void>("set_rating", { ids, rating }),
+  setLoved: (ids: number[], loved: boolean) => invoke<void>("set_loved", { ids, loved }),
   /** Add Inbox tracks to the library; all of them when `ids` is null. */
   clearInbox: (ids: number[] | null = null) => invoke<void>("clear_inbox", { ids }),
   /** Remove Inbox tracks (files stay on disk) and skip them on later scans. Returns the removed ids. */
@@ -213,6 +220,9 @@ export const api = {
   ignoredFiles: () => invoke<IgnoredFile[]>("ignored_files"),
   /** Stop ignoring files; a rescan brings them back into the Inbox. */
   unignoreFiles: (paths: string[]) => invoke<void>("unignore_files", { paths }),
+  unreadableFiles: () => invoke<UnreadableFile[]>("unreadable_files"),
+  /** Forget which files failed and rescan, so every one is read again. */
+  retryUnreadable: () => invoke<void>("retry_unreadable"),
   /** Songs in the listening history (what was played and how it ended). */
   listenCount: () => invoke<number>("listen_count"),
   clearListens: () => invoke<void>("clear_listens"),
