@@ -65,8 +65,6 @@ Everything finished so far, including items that were planned for later months a
 - 🔧 Multi-pick and right-click in the column browser.
 - 🔧 Listening history (what played, when, and how it ended), off until the user turns it on. The groundwork for sound-based playlists.
 - 🔧 Setup screen for new users (and once for existing ones), smoother motion, clickable artist and album names, Shuffle in the track menu.
-- 🔧 Hearts for loved songs: a ♥ column, Love / Unlove in the track menu, and a heart in Now Playing.
-- 🔧 Unreadable files are remembered with the reason and skipped until they change; Settings → Library lists them (#6).
 - 🔧 Multi-device plan over OpenSubsonic (`docs/ARCHITECTURE.md`): approved, a document only, nothing built.
 
 ## Month 1 (November): ship something people can install
@@ -78,6 +76,12 @@ Everything finished so far, including items that were planned for later months a
 - 🚀 A download page (honeycomb.n1ji.dev).
 - 🚀 Performance baseline: 100k-track library, see `docs/perf-baseline.md` (startup 0.95 s, search ~65 ms, sort ~70 ms).
 - 🟡 Fix: removing the playing track stops playback (#4), and audio dies when headphones are unplugged (#5). Fixed in code and live in 0.1.1, still needs a listening test.
+
+**Done in November** (including items moved up from later months):
+
+- 🔧 Hearts for loved songs: a ♥ column, Love / Unlove in the track menu, and a heart in Now Playing (from "Next up").
+- 🔧 Unreadable files are remembered with the reason and skipped until they change; Settings → Library lists them (#6, was Month 5).
+- 🔧 Drag to reorder playlists and the queue; the playing song keeps playing. Dragging onto sidebar playlists works on Mac now too (was Month 6).
 
 **Done when:** a stranger can download an alpha for Mac or Linux, install it, and receive the next update automatically.
 
@@ -136,14 +140,13 @@ Lyrics were done in October.
 
 ## Month 6 (April): polish toward 1.0
 
-Kept to what 1.0 needs. Nice-to-haves moved to "Later".
+Kept to what 1.0 needs. Nice-to-haves moved to "Later"; drag to reorder was done in November.
 
 - Performance pass against the Month 1 baseline: load the library lazily so startup stays fast at 100k tracks, a faster search index, and cached artwork thumbnails.
 - Customization: choose, order and resize track list columns, and pick the column browser's fields.
 - A signed and notarized Mac build (needs the Apple account), and Linux packages on Flathub and/or the AUR.
 - Windows builds kept working, even though it isn't the main target.
 - A user guide covering migration, sync and Last.fm setup.
-- Drag to reorder playlists and the play queue.
 - Launch on Product Hunt with 1.0 (not before: the first launch gets the most attention). Prepare the gallery, the demo video, a maker's first comment, and early users who'll be around on launch day. Update the AlternativeTo listing and post to r/MacApps at the same time.
 
 **Done when:** a 1.0 beta is announced to Mac and Linux music library users.
