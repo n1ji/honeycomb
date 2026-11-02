@@ -82,6 +82,7 @@ Everything finished so far, including items that were planned for later months a
 - 🔧 Hearts for loved songs: a ♥ column, Love / Unlove in the track menu, and a heart in Now Playing (from "Next up").
 - 🔧 Unreadable files are remembered with the reason and skipped until they change; Settings → Library lists them (#6, was Month 5).
 - 🔧 Drag to reorder playlists and the queue; the playing song keeps playing. Dragging onto sidebar playlists works on Mac now too (was Month 6).
+- 🔧 Sync artists and albums to a device, not just playlists; later syncs pick up their new albums too (not on the plan, added along the way).
 
 **Done when:** a stranger can download an alpha for Mac or Linux, install it, and receive the next update automatically.
 
