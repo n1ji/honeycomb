@@ -623,6 +623,12 @@ fn player_enqueue(state: State<AppState>, track_ids: Vec<i64>, next: bool) -> Cm
 }
 
 #[tauri::command]
+fn player_move(state: State<AppState>, indices: Vec<usize>, to: usize) -> CmdResult<()> {
+    state.player.send(Cmd::Move(indices, to));
+    Ok(())
+}
+
+#[tauri::command]
 fn player_cmd(state: State<AppState>, cmd: String, value: Option<f64>) -> CmdResult<()> {
     let v = value.unwrap_or(0.0);
     let c = match cmd.as_str() {
@@ -820,6 +826,7 @@ pub fn run() {
             perf_log,
             player_load,
             player_enqueue,
+            player_move,
             player_cmd,
             player_remove,
         ])

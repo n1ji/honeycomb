@@ -661,6 +661,19 @@ body.resizing {
   inset: 0;
 }
 
+/* Where rows dragged into a new order will land. */
+.tl-drop {
+  display: none;
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 2px;
+  background: var(--accent);
+  pointer-events: none;
+  z-index: 2;
+}
+
 .tl-row {
   position: absolute;
   left: 0;

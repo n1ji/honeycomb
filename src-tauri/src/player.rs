@@ -65,6 +65,9 @@ pub enum Cmd {
     Enqueue(Vec<QItem>, bool),
     Jump(usize),
     Remove(Vec<usize>),
+    /// Move the items at these indices so they sit together before index `to`
+    /// (counted in the queue as it was; the length moves them to the end).
+    Move(Vec<usize>, usize),
     Clear,
     Emit,
 }
@@ -421,6 +424,14 @@ impl<R: Runtime> Engine<R> {
                     Some(uid) => self.current = self.queue.iter().position(|q| q.uid == uid),
                     None => {}
                 }
+            }
+            Cmd::Move(idxs, to) => {
+                // The playing track keeps playing wherever it ends up. When
+                // shuffled, only the shuffled order changes; turning shuffle
+                // off still brings back the original order.
+                let current_uid = self.current.map(|c| self.queue[c].uid);
+                move_items(&mut self.queue, &idxs, to);
+                self.current = current_uid.and_then(|u| self.queue.iter().position(|q| q.uid == u));
             }
             Cmd::Clear => {
                 self.note_ending("stopped");
@@ -1009,6 +1020,19 @@ impl<R: Runtime> Engine<R> {
     }
 }
 
+/// Move the items at `idxs` (in their current order) to sit before index `to`
+/// of the original list. Out-of-range indices are ignored.
+fn move_items<T>(v: &mut Vec<T>, idxs: &[usize], to: usize) {
+    let mut idxs: Vec<usize> = idxs.iter().copied().filter(|&i| i < v.len()).collect();
+    idxs.sort_unstable();
+    idxs.dedup();
+    let to = to.min(v.len());
+    let at = to - idxs.iter().filter(|&&i| i < to).count();
+    let mut taken: Vec<T> = idxs.iter().rev().map(|&i| v.remove(i)).collect();
+    taken.reverse();
+    v.splice(at..at, taken);
+}
+
 fn file_stem(path: &str) -> String {
     std::path::Path::new(path).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
 }
@@ -1026,6 +1050,22 @@ mod tests {
         assert_eq!(super::listen_threshold(30.0), None);
         assert_eq!(super::listen_threshold(100.0), Some(50.0));
         assert_eq!(super::listen_threshold(1200.0), Some(240.0));
+    }
+
+    #[test]
+    fn move_items_keeps_the_moved_ones_together_in_order() {
+        let moved = |idxs: &[usize], to: usize| {
+            let mut v = vec!['a', 'b', 'c', 'd', 'e'];
+            super::move_items(&mut v, idxs, to);
+            v.into_iter().collect::<String>()
+        };
+        assert_eq!(moved(&[0], 3), "bcade", "down: lands before what was at index 3");
+        assert_eq!(moved(&[3], 1), "adbce", "up");
+        assert_eq!(moved(&[4, 1], 0), "beacd", "several, picked out of order, keep list order");
+        assert_eq!(moved(&[0, 2], 5), "bdeac", "to the end");
+        assert_eq!(moved(&[1, 3], 2), "abdce", "dropped between the moved ones");
+        assert_eq!(moved(&[2], 2), "abcde", "onto itself");
+        assert_eq!(moved(&[9], 0), "abcde", "out of range is ignored");
     }
 
     use super::*;

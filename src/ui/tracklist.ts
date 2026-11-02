@@ -1,6 +1,6 @@
 import { api, Track } from "../api";
 import { artistOf, SortKey, store } from "../store";
-import { $, fmtDate, fmtTime, h, heart, modKey, stars } from "../util";
+import { $, fmtDate, fmtTime, h, heart, modKey, moveItems, stars } from "../util";
 import { openTrackMenu, removeSelected, run, setLoved } from "./actions";
 import { openColumnsCustomizer, setLayoutSetting } from "./customize";
 import { dragFrom, saveSetting } from "./layout";
@@ -96,6 +96,10 @@ let rowsEl: HTMLElement;
 let header: HTMLElement;
 let empty: HTMLElement;
 let frame = 0;
+/** Line showing where dragged rows will land. */
+let dropLine: HTMLElement;
+/** Positions in `viewIds` of rows being dragged inside the list, while a drag is on. */
+let dragging: number[] | null = null;
 
 /** In playlists and the queue the first column is the row's position, not the track number. */
 function positional(): boolean {
@@ -110,7 +114,8 @@ export function mountTrackList() {
   spacer = h("div", { class: "tl-spacer" });
   rowsEl = h("div", { class: "tl-rows" });
   empty = h("div", { class: "tl-empty" });
-  spacer.append(rowsEl);
+  dropLine = h("div", { class: "tl-drop" });
+  spacer.append(rowsEl, dropLine);
   scroller.append(spacer, empty);
   root.append(header, scroller);
 
@@ -137,7 +142,24 @@ export function mountTrackList() {
     if (i < 0 || !e.dataTransfer) return;
     if (!store.selection.has(i)) select(i, false, false);
     e.dataTransfer.setData("application/x-honeycomb-tracks", JSON.stringify(store.selectedIds()));
-    e.dataTransfer.effectAllowed = "copy";
+    // Copy onto a playlist in the sidebar; move when reordering this list.
+    e.dataTransfer.effectAllowed = "copyMove";
+    dragging = canReorder() ? [...store.selection].sort((a, b) => a - b).map((r) => store.visibleSource[r]) : null;
+  });
+  scroller.addEventListener("dragover", onReorderOver);
+  scroller.addEventListener("dragleave", (e) => {
+    if (!scroller.contains(e.relatedTarget as Node)) dropLine.style.display = "none";
+  });
+  scroller.addEventListener("drop", (e) => {
+    const to = dropTarget(e);
+    dropLine.style.display = "none";
+    if (!dragging || to === null) return;
+    e.preventDefault();
+    void run(() => reorder(dragging!, to));
+  });
+  rowsEl.addEventListener("dragend", () => {
+    dragging = null;
+    dropLine.style.display = "none";
   });
   scroller.addEventListener("keydown", onKey);
 
@@ -346,6 +368,59 @@ function render() {
     out.push(row);
   }
   rowsEl.replaceChildren(...out);
+}
+
+/** Rows can be dragged into a new order in the queue and manual playlists, unless a column sort hides the real order. */
+function canReorder(): boolean {
+  return positional() && !store.sort;
+}
+
+/** The visible row the dragged rows would land before (the row count means after the last), or null outside a reorder. */
+function dropTarget(e: DragEvent): number | null {
+  if (!dragging || !canReorder()) return null;
+  const y = e.clientY - spacer.getBoundingClientRect().top;
+  return Math.max(0, Math.min(store.visible.length, Math.round(y / rowH())));
+}
+
+function onReorderOver(e: DragEvent) {
+  const i = dropTarget(e);
+  if (i === null) return;
+  e.preventDefault();
+  if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+  dropLine.style.display = "block";
+  dropLine.style.transform = `translateY(${i * rowH() - 1}px)`;
+  // Scroll while dragging near the top or bottom edge.
+  const box = scroller.getBoundingClientRect();
+  if (e.clientY < box.top + 30) scroller.scrollTop -= rowH();
+  else if (e.clientY > box.bottom - 30) scroller.scrollTop += rowH();
+}
+
+/**
+ * Move the rows at `from` (positions in `viewIds`) before visible row `row`,
+ * in the queue or the open playlist, and keep them selected.
+ */
+async function reorder(from: number[], row: number) {
+  const src = store.visibleSource;
+  // With a search on, the end of the visible rows isn't the end of the list.
+  const to = row < src.length ? src[row] : src.length ? src[src.length - 1] + 1 : 0;
+  const { out, at } = moveItems(store.viewIds, from, to);
+  if (out.every((id, i) => id === store.viewIds[i])) return;
+  if (store.view.kind === "queue") {
+    await api.moveInQueue(from, to);
+  } else {
+    const pl = store.currentPlaylist;
+    if (pl?.kind !== "manual") return;
+    await api.setPlaylistTracks(pl.id, out);
+  }
+  // Show the new order now; the queue's own update arrives with the same order.
+  store.viewIds = out;
+  store.viewVersion++;
+  store.recompute("keepAll");
+  store.selection.clear();
+  store.visibleSource.forEach((s, i) => {
+    if (s >= at && s < at + from.length) store.selection.add(i);
+  });
+  store.emit("selection");
 }
 
 /** Columns whose names jump to that artist or album when clicked. */

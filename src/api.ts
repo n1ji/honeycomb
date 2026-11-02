@@ -265,6 +265,8 @@ export const api = {
   enqueue: (trackIds: number[], next: boolean) => invoke<void>("player_enqueue", { trackIds, next }),
   cmd: (cmd: string, value?: number) => invoke<void>("player_cmd", { cmd, value }),
   removeFromQueue: (indices: number[]) => invoke<void>("player_remove", { indices }),
+  /** Move queue items so they sit together before index `to`. */
+  moveInQueue: (indices: number[], to: number) => invoke<void>("player_move", { indices, to }),
 };
 
 const artVersions = new Map<number, number>();

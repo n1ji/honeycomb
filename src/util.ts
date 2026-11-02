@@ -62,6 +62,20 @@ export function stars(rating: number, cls = "stars"): HTMLElement {
   return el;
 }
 
+/**
+ * Move the items at `idxs` to sit together, in list order, before index `to`
+ * of the original list. Returns the new list and where the moved items start.
+ * Same rules as the player's `move_items`, so the queue and the view agree.
+ */
+export function moveItems<T>(list: T[], idxs: number[], to: number): { out: T[]; at: number } {
+  const picked = new Set(idxs.filter((i) => i >= 0 && i < list.length));
+  const end = Math.min(to, list.length);
+  const at = end - [...picked].filter((i) => i < end).length;
+  const rest = list.filter((_, i) => !picked.has(i));
+  const moved = list.filter((_, i) => picked.has(i));
+  return { out: [...rest.slice(0, at), ...moved, ...rest.slice(at)], at };
+}
+
 /** A heart that's filled when the track is loved. `data-love` makes it clickable. */
 export function heart(loved: boolean, cls = "heart"): HTMLElement {
   // U+FE0E keeps it a text glyph, so it takes the accent colour instead of turning into an emoji.
