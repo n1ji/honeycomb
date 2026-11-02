@@ -1,6 +1,6 @@
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
-import { api, SyncConvert, SyncProfile, SyncReport } from "../api";
+import { AlbumPick, api, SyncConvert, SyncProfile, SyncReport } from "../api";
 import { store } from "../store";
 import { h, toast } from "../util";
 import { run } from "./actions";
@@ -25,15 +25,35 @@ async function saveProfile(p: SyncProfile) {
   await api.setSetting(SETTING, store.settings[SETTING]);
 }
 
-/** Sync playlists or the whole library to a player or flash drive. */
-export function openSync() {
+/** Artists and albums picked with right-click → Sync to a device. */
+export interface SyncPick {
+  artists: string[];
+  albums: AlbumPick[];
+}
+
+/** `q` with the picked artists and albums added to what it already syncs. */
+function withPick(q: SyncProfile, pick?: SyncPick): SyncProfile {
+  const artists = [...(q.artists ?? [])];
+  const albums = [...(q.albums ?? [])];
+  for (const a of pick?.artists ?? []) if (!artists.includes(a)) artists.push(a);
+  for (const a of pick?.albums ?? []) if (!albums.some((b) => b.artist === a.artist && b.album === a.album)) albums.push(a);
+  return { ...q, artists, albums };
+}
+
+/**
+ * Sync playlists, artists, albums or the whole library to a player or flash
+ * drive. `pick` adds artists or albums to the device's list (whichever device
+ * is chosen), where later syncs keep them.
+ */
+export function openSync(pick?: SyncPick) {
   const m = modal("Sync to a device", { wide: true });
   const saved = savedProfiles();
-  let p: SyncProfile = saved[0] ?? { dest: "", wholeLibrary: false, playlists: [], removeUnselected: true };
+  let p: SyncProfile = withPick(saved[0] ?? { dest: "", wholeLibrary: false, playlists: [], removeUnselected: true }, pick);
 
   const destLabel = h("span", {});
   const destInfo = h("p", { class: "muted" });
   const lists = h("div", { class: "sync-lists" });
+  const groups = h("div", { class: "sync-lists" });
   const whole = h("input", { type: "checkbox" });
   const remove = h("input", { type: "checkbox" });
   const convertOn = h("input", { type: "checkbox" });
@@ -129,6 +149,24 @@ export function openSync() {
           })
         : [h("p", { class: "muted" }, "No playlists yet.")]),
     );
+    // Artists and albums added from a right-click; unticking one takes it off the list.
+    const box = (label: string, sub: string, drop: () => void) => {
+      const el = h("input", { type: "checkbox", checked: true, disabled: p.wholeLibrary });
+      el.addEventListener("change", () => {
+        drop();
+        renderLists();
+      });
+      return h("label", { class: "check" }, el, label, sub ? h("span", { class: "muted" }, ` ${sub}`) : "");
+    };
+    const artists = p.artists ?? [];
+    const albums = p.albums ?? [];
+    groups.replaceChildren(
+      ...(artists.length || albums.length ? [h("p", { class: "muted" }, "Artists and albums")] : []),
+      ...artists.map((a) => box(a || "Unknown artist", "(everything by them)", () => (p.artists = artists.filter((x) => x !== a)))),
+      ...albums.map((a) =>
+        box(a.album || "Unknown album", a.artist ? `by ${a.artist}` : "", () => (p.albums = albums.filter((x) => x !== a))),
+      ),
+    );
   };
   whole.addEventListener("change", () => {
     p.wholeLibrary = whole.checked;
@@ -140,7 +178,7 @@ export function openSync() {
     run(async () => {
       const dir = await open({ directory: true, multiple: false, title: "Where should the music go?" });
       if (typeof dir !== "string") return;
-      p = savedProfiles().find((q) => q.dest === dir) ?? { ...p, dest: dir };
+      p = withPick(savedProfiles().find((q) => q.dest === dir) ?? { ...p, dest: dir }, pick);
       renderLists();
       await describeDest();
     });
@@ -150,7 +188,7 @@ export function openSync() {
     for (const q of saved) devices.append(h("option", { value: q.dest }, q.dest));
     devices.addEventListener("change", () =>
       run(async () => {
-        p = savedProfiles().find((q) => q.dest === devices.value) ?? p;
+        p = withPick(savedProfiles().find((q) => q.dest === devices.value) ?? p, pick);
         renderLists();
         await describeDest();
       }),
@@ -166,6 +204,7 @@ export function openSync() {
       h("h3", {}, "What to put on it"),
       h("label", { class: "check" }, whole, "The whole library"),
       lists,
+      groups,
       h("label", { class: "check" }, remove, "Remove synced files that are no longer chosen"),
       h("h3", {}, "Converting"),
       h("label", { class: "check" }, convertOn, "Convert lossless files to save space or suit the player"),
@@ -181,7 +220,7 @@ export function openSync() {
 
   async function startSync() {
     if (!p.dest) return;
-    if (!p.wholeLibrary && !p.playlists.length) {
+    if (!p.wholeLibrary && !p.playlists.length && !p.artists?.length && !p.albums?.length) {
       toast("Choose some playlists or the whole library first.", true);
       return;
     }

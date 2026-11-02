@@ -42,7 +42,7 @@ const MAX_NAME: usize = 80;
 /// Save the manifest at least this often while copying.
 const SAVE_EVERY: usize = 20;
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Profile {
     /// Folder on the device that the music goes into.
@@ -50,11 +50,23 @@ pub struct Profile {
     /// Sync everything instead of `playlists`.
     pub whole_library: bool,
     pub playlists: Vec<i64>,
+    /// Every track by these artists (album artist, else track artist), now and later.
+    #[serde(default)]
+    pub artists: Vec<String>,
+    #[serde(default)]
+    pub albums: Vec<AlbumPick>,
     /// Remove synced files that are no longer chosen.
     pub remove_unselected: bool,
     /// Convert lossless files to this; None copies everything as it is.
     #[serde(default)]
     pub convert: Option<Convert>,
+}
+
+/// An album, told apart from same-named ones by its artist (album artist, else track artist).
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct AlbumPick {
+    pub artist: String,
+    pub album: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -318,6 +330,21 @@ pub fn selection(conn: &Connection, p: &Profile, resolve: &dyn Fn(i64) -> Result
         tracks.sort_by(|a, b| a.path.cmp(&b.path));
         ids.extend(tracks.iter().map(|t| t.id));
         seen.extend(ids.iter().copied());
+    } else if !p.artists.is_empty() || !p.albums.is_empty() {
+        let artists: HashSet<&str> = p.artists.iter().map(String::as_str).collect();
+        let mut picked: Vec<Track> = db::all_tracks(conn)?
+            .into_iter()
+            .filter(|t| {
+                let artist = if t.album_artist.is_empty() { &t.artist } else { &t.album_artist };
+                artists.contains(artist.as_str()) || p.albums.iter().any(|a| a.artist == *artist && a.album == t.album)
+            })
+            .collect();
+        picked.sort_by(|a, b| a.path.cmp(&b.path));
+        for t in picked {
+            if seen.insert(t.id) {
+                ids.push(t.id);
+            }
+        }
     }
     for pl in all.iter().filter(|pl| p.playlists.contains(&pl.id)) {
         let tids = resolve(pl.id)?;
@@ -699,7 +726,7 @@ mod tests {
         let stick = root.join("stick");
         fs::write(stick.join("my notes.txt"), "mine").unwrap();
         let road = playlist(&mut conn, "Road: Trip", &ids[..2]);
-        let mut p = Profile { dest: stick.to_string_lossy().into(), whole_library: false, playlists: vec![road], remove_unselected: true, convert: None };
+        let mut p = Profile { dest: stick.to_string_lossy().into(), whole_library: false, playlists: vec![road], remove_unselected: true, convert: None, ..Default::default() };
 
         let r = sync(&conn, &p);
         assert_eq!((r.copied, r.unchanged, r.removed, r.playlists), (2, 0, 0, 1), "{r:?}");
@@ -736,7 +763,7 @@ mod tests {
         let stick = root.join("stick");
         conn.execute("UPDATE tracks SET inbox = 1 WHERE id = ?1", [ids[1]]).unwrap();
         let mix = playlist(&mut conn, "Mix", &ids);
-        let p = Profile { dest: stick.to_string_lossy().into(), whole_library: true, playlists: vec![mix], remove_unselected: true, convert: None };
+        let p = Profile { dest: stick.to_string_lossy().into(), whole_library: true, playlists: vec![mix], remove_unselected: true, convert: None, ..Default::default() };
         let r = sync(&conn, &p);
         assert_eq!(r.copied, 2, "{r:?}");
         assert!(!stick.join("Artist/Album/02 Two.mp3").exists());
@@ -772,6 +799,7 @@ mod tests {
             playlists: vec![list],
             remove_unselected: false,
             convert: Some(mp3),
+            ..Default::default()
         };
 
         // The WAV becomes an MP3; the (lossy) MP3s are copied as they are.
@@ -821,7 +849,7 @@ mod tests {
             }
         }
         let c = Convert { format, quality: convert::Quality::High };
-        let p = Profile { dest, whole_library: true, playlists: vec![], remove_unselected: false, convert: Some(c) };
+        let p = Profile { dest, whole_library: true, playlists: vec![], remove_unselected: false, convert: Some(c), ..Default::default() };
         let started = Instant::now();
         let r = sync(&conn, &p);
         println!("{r:?} in {:.1} s", started.elapsed().as_secs_f64());
@@ -834,7 +862,7 @@ mod tests {
         let stick = root.join("stick");
         fs::create_dir_all(stick.join("Artist/Album")).unwrap();
         fs::write(stick.join("Artist/Album/01 One.mp3"), "someone else's").unwrap();
-        let p = Profile { dest: stick.to_string_lossy().into(), whole_library: true, playlists: vec![], remove_unselected: true, convert: None };
+        let p = Profile { dest: stick.to_string_lossy().into(), whole_library: true, playlists: vec![], remove_unselected: true, convert: None, ..Default::default() };
         let r = sync(&conn, &p);
         assert_eq!(r.copied, 2);
         assert_eq!(r.failed.len(), 1, "{r:?}");
@@ -846,7 +874,7 @@ mod tests {
     fn cancelling_leaves_no_partial_files() {
         let (root, conn, _) = setup("cancel");
         let stick = root.join("stick");
-        let p = Profile { dest: stick.to_string_lossy().into(), whole_library: true, playlists: vec![], remove_unselected: false, convert: None };
+        let p = Profile { dest: stick.to_string_lossy().into(), whole_library: true, playlists: vec![], remove_unselected: false, convert: None, ..Default::default() };
         let cancel = AtomicBool::new(true);
         let resolve = |id| db::manual_playlist_track_ids(&conn, id);
         let r = run(&conn, &p, &resolve, &|_| {}, &cancel).unwrap();
@@ -879,7 +907,7 @@ mod tests {
         });
         fs::write(stick.join(MANIFEST), manifest.to_string()).unwrap();
         let only = playlist(&mut conn, "Only", &ids[..1]);
-        let p = Profile { dest: stick.to_string_lossy().into(), whole_library: false, playlists: vec![only], remove_unselected: true, convert: None };
+        let p = Profile { dest: stick.to_string_lossy().into(), whole_library: false, playlists: vec![only], remove_unselected: true, convert: None, ..Default::default() };
         let r = sync(&conn, &p);
         assert_eq!((r.copied, r.removed), (1, 0), "{r:?}");
         assert_eq!(fs::read_to_string(&outside).unwrap(), "keep me");
@@ -902,7 +930,7 @@ mod tests {
             "files": { "Artist/Album/01 One.mp3": { "trackId": 999, "size": 1000, "mtime": 0 } },
         });
         fs::write(stick.join(MANIFEST), manifest.to_string()).unwrap();
-        let p = Profile { dest: stick.to_string_lossy().into(), whole_library: false, playlists: vec![], remove_unselected: true, convert: None };
+        let p = Profile { dest: stick.to_string_lossy().into(), whole_library: false, playlists: vec![], remove_unselected: true, convert: None, ..Default::default() };
         // Nothing chosen: the manifest's file is "stale" and would be removed.
         let r = sync(&conn, &p);
         assert_eq!(r.removed, 0, "{r:?}");
@@ -916,13 +944,40 @@ mod tests {
     }
 
     #[test]
+    fn artists_and_albums_pick_their_tracks() {
+        let (root, conn, ids) = setup("artists");
+        let add = |path: &str, artist: &str, album_artist: &str, album: &str| {
+            let t = Track { path: path.into(), artist: artist.into(), album_artist: album_artist.into(), album: album.into(), ..Default::default() };
+            db::upsert_track(&conn, &t).unwrap()
+        };
+        let feat = add("/m/feat.mp3", "Guest", "Band", "Live"); // counts as Band's
+        let other = add("/m/other.mp3", "Band", "", "Other");
+        let same_name = add("/m/same.mp3", "Someone Else", "", "Album");
+        let waiting = add("/m/new.mp3", "Band", "", "Live");
+        conn.execute("UPDATE tracks SET inbox = 1 WHERE id = ?1", [waiting]).unwrap();
+        let picked = |p: &Profile| {
+            let resolve = |id| db::manual_playlist_track_ids(&conn, id);
+            let mut got: Vec<i64> = selection(&conn, p, &resolve).unwrap().0.iter().map(|t| t.id).collect();
+            got.sort();
+            got
+        };
+
+        let p = Profile { artists: vec!["Band".into()], ..Default::default() };
+        assert_eq!(picked(&p), [feat, other], "by album artist first; Inbox tracks stay off");
+        let p = Profile { albums: vec![AlbumPick { artist: "Artist".into(), album: "Album".into() }], ..Default::default() };
+        assert_eq!(picked(&p), ids, "an album isn't mixed up with another artist's album of the same name");
+        assert!(!picked(&p).contains(&same_name));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn reads_plays_back_from_rockbox() {
         let (root, conn, ids) = setup("rockbox");
         let player = root.join("stick");
         fs::create_dir_all(player.join(".rockbox")).unwrap();
         let music = player.join("Music");
         fs::create_dir_all(&music).unwrap();
-        let p = Profile { dest: music.to_string_lossy().into(), whole_library: true, playlists: vec![], remove_unselected: false, convert: None };
+        let p = Profile { dest: music.to_string_lossy().into(), whole_library: true, playlists: vec![], remove_unselected: false, convert: None, ..Default::default() };
         sync(&conn, &p);
 
         let log = player.join(".rockbox/playback.log");

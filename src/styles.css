@@ -1512,6 +1512,12 @@ textarea.input {
   max-height: 200px;
   overflow-y: auto;
   margin: 4px 0 8px 22px;
+  /* In a short window the dialog scrolls; the lists keep their size instead of being squashed. */
+  flex-shrink: 0;
+}
+
+.sync-lists > * {
+  flex-shrink: 0;
 }
 
 .modal progress {

@@ -198,7 +198,13 @@ export function mountSidebar() {
                 (f.genre === undefined || t.genre === f.genre)
               );
             });
-          openTrackMenu(e.clientX, e.clientY, ids);
+          const pick =
+            f.album !== undefined
+              ? { artists: [], albums: [{ artist: f.artist ?? "", album: f.album }] }
+              : f.artist !== undefined
+                ? { artists: [f.artist], albums: [] }
+                : undefined;
+          openTrackMenu(e.clientX, e.clientY, ids, pick);
         });
         return el;
       }),

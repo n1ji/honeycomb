@@ -160,11 +160,20 @@ export interface SyncConvert {
   quality: "high" | "smaller";
 }
 
+/** An album, told apart from same-named ones by its artist (album artist, else track artist). */
+export interface AlbumPick {
+  artist: string;
+  album: string;
+}
+
 export interface SyncProfile {
   /** Folder on the device that the music goes into. */
   dest: string;
   wholeLibrary: boolean;
   playlists: number[];
+  /** Every track by these artists, now and later. Missing in profiles saved before they existed. */
+  artists?: string[];
+  albums?: AlbumPick[];
   /** Remove synced files that are no longer chosen. */
   removeUnselected: boolean;
   /** Convert lossless files to this; missing or null copies everything as it is. */

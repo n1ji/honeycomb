@@ -70,7 +70,14 @@ export function mountBrowser() {
         const set = new Set(picked?.includes(v) ? picked : [v]);
         rows = rows.filter((t) => set.has(p.get(t)));
       }
-      openTrackMenu(e.clientX, e.clientY, rows.map((t) => t.id));
+      // The artists or albums under the cursor, for "Sync to a device"; genres aren't offered.
+      const pick =
+        p.key === "artist"
+          ? { artists: [...new Set(rows.map(artistOf))], albums: [] }
+          : p.key === "album"
+            ? { artists: [], albums: [...new Map(rows.map((t) => [`${artistOf(t)}\u0000${t.album}`, { artist: artistOf(t), album: t.album }])).values()] }
+            : undefined;
+      openTrackMenu(e.clientX, e.clientY, rows.map((t) => t.id), pick);
     });
   }
 

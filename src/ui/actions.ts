@@ -7,6 +7,7 @@ import { promptText } from "./dialogs";
 import { MenuItem, openMenu, SEP } from "./menu";
 import { openSmartEditor } from "./smarteditor";
 import { openTagEditor } from "./tageditor";
+import { openSync, SyncPick } from "./sync";
 
 export async function run(fn: () => Promise<unknown>) {
   try {
@@ -19,8 +20,10 @@ export async function run(fn: () => Promise<unknown>) {
 /**
  * The menu for the selected tracks, or for `group` (every track of an artist,
  * album or genre in the column browser), which works on all of them at once.
+ * `pick` names the artists or albums the group stands for, so they can be
+ * added to a device's sync list.
  */
-export function openTrackMenu(x: number, y: number, group?: number[]) {
+export function openTrackMenu(x: number, y: number, group?: number[], pick?: SyncPick) {
   const ids = group ?? store.selectedIds();
   if (!ids.length) return;
   const manual = store.playlists.filter((p) => p.kind === "manual");
@@ -41,6 +44,7 @@ export function openTrackMenu(x: number, y: number, group?: number[]) {
         ...manual.map((p) => ({ label: p.name, action: () => run(() => addToPlaylist(p, ids)) })),
       ],
     },
+    ...(pick && (pick.artists.length || pick.albums.length) ? [{ label: `Sync ${pickName(pick)} to a device…`, action: () => openSync(pick) }] : []),
     {
       label: "Rating",
       submenu: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((r) => ({
@@ -74,6 +78,13 @@ export function openTrackMenu(x: number, y: number, group?: number[]) {
     items.push(SEP, { label: "Remove from playlist", action: () => removeSelected() });
   }
   openMenu(x, y, items);
+}
+
+/** "this artist", "these 3 albums" and so on. */
+function pickName(pick: SyncPick): string {
+  const n = pick.artists.length + pick.albums.length;
+  const what = pick.albums.length === 0 ? "artist" : pick.artists.length === 0 ? "album" : "item";
+  return n === 1 ? `this ${what}` : `these ${n} ${what}s`;
 }
 
 /** A shuffled copy (Fisher-Yates), for playing a whole artist or album in random order. */
