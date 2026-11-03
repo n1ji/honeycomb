@@ -20,7 +20,7 @@ October went faster than planned: most of Months 1–4 is already built. Every i
 | Mark | Meaning |
 | --- | --- |
 | 🚀 | **Live:** in the newest release (0.1.1), so people who download Honeycomb have it |
-| 🔧 | **On dev:** done and pushed to `dev`, waiting for the next release (listed under "Unreleased" in `CHANGELOG.md`) |
+| 🔧 | **On dev:** done and pushed to `dev`, not in a published release yet. Right now that means it's in **0.2.0** (tagged 2026-11-03, built by CI, waiting to be published) |
 | 🟡 | Partly done, or done but not tested yet (the note says which, and whether it's live) |
 | (none) | Not started |
 
@@ -55,7 +55,7 @@ Everything finished so far, including items that were planned for later months a
 - 🚀 Lyrics: embedded, `.lrc` files and online lookup, synced lines highlighted (was Month 5).
 - 🚀 Media keys and the system Now Playing display.
 
-**On dev, coming in the next release**
+**In 0.2.0** (tagged 2026-11-03, not published yet)
 
 - 🔧 In-app updates: signed releases install from the update bulb.
 - 🔧 Quality badge and signal path view; bit depth column and smart rule.
@@ -77,7 +77,7 @@ Everything finished so far, including items that were planned for later months a
 - 🚀 Performance baseline: 100k-track library, see `docs/perf-baseline.md` (startup 0.95 s, search ~65 ms, sort ~70 ms).
 - 🟡 Fix: removing the playing track stops playback (#4), and audio dies when headphones are unplugged (#5). Fixed in code and live in 0.1.1, still needs a listening test.
 
-**Done in November** (including items moved up from later months):
+**Done in November** (including items moved up from later months; all in 0.2.0):
 
 - 🔧 Hearts for loved songs: a ♥ column, Love / Unlove in the track menu, and a heart in Now Playing (from "Next up").
 - 🔧 Unreadable files are remembered with the reason and skipped until they change; Settings → Library lists them (#6, was Month 5).
