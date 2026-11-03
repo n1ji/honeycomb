@@ -12,12 +12,11 @@ Alpha builds are on the [Releases page](https://github.com/n1ji/honeycomb/releas
 
 - **macOS:** `Honeycomb_<version>_universal.dmg` (Apple Silicon and Intel)
 - **Windows:** `Honeycomb_<version>_x64-setup.exe`, or `Honeycomb_<version>_x64_en-US.msi`
+- **Linux (x86_64):** `Honeycomb_<version>_amd64.AppImage`, `Honeycomb_<version>_amd64.deb` (Debian, Ubuntu), or `Honeycomb-<version>-1.x86_64.rpm` (Fedora, openSUSE). The AppImage needs `chmod +x` and libfuse2 (`libfuse2t64` on newer Debian and Ubuntu); the .deb and .rpm pull in WebKitGTK themselves. Linux is new in 0.2.0, so tell me how it runs on your distro.
 
 Honeycomb is only ever published here and on [honeycomb.n1ji.dev](https://honeycomb.n1ji.dev). If you find it offered anywhere else, it isn't from me, so don't install it. Each release also lists SHA-256 checksums (`SHA256SUMS.txt`) to check your download against.
 
-Linux builds will come with a later release.
-
-The builds aren't code-signed yet, so your system will warn you the first time:
+The Mac and Windows builds aren't code-signed yet, so your system will warn you the first time:
 
 - **macOS:** open Honeycomb once and dismiss the warning. Then go to **System Settings → Privacy & Security**, scroll down to the message about Honeycomb, click **Open Anyway** and confirm. You only need to do this once. (Right-click → Open no longer skips the warning on macOS 15 and later.) If you'd rather use Terminal, `xattr -cr /Applications/Honeycomb.app` does the same.
 - **Windows:** if SmartScreen says it protected your PC, click **More info**, then **Run anyway**.
