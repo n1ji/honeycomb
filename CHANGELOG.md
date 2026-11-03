@@ -20,6 +20,7 @@ and uses it as the GitHub release notes.
 - Hearts! You can love songs now: click the ♥ in the song list (it shows up when you hover a row), right-click → **Love**, or hit the heart under the stars in Now Playing. Songs you loved in another player come over with the import, and smart playlists can already use them ("Loved is 1"). If you set up your columns before, you can add the ♥ column by right-clicking the column headers.
 - Files Honeycomb can't read don't get read over and over on every rescan anymore, which makes rescans faster with a few broken files around. Settings → Library → **Unreadable files** lists them with the reason (like an empty file from a download that didn't finish), and Honeycomb tries a file again by itself as soon as it changes.
 - Moving or renaming your music files inside a library folder doesn't lose their play counts, ratings or playlist spots anymore. Honeycomb notices it's the same song and just follows it to the new place.
+- Sync is safer with drives someone else set up. If a folder on the drive is really a link to somewhere else on your computer, Honeycomb now refuses to write through it even on the very first sync, and a leftover half-copied file on the drive can't trick it into overwriting something else.
 
 ## 0.1.1, 2026-10-29
 

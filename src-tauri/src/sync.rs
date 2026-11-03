@@ -215,12 +215,19 @@ fn safe_rel(rel: &str) -> bool {
 }
 
 /// Whether `path`'s folder really is inside `dest`, after following
-/// symlinks (a drive could link a folder to somewhere else).
+/// symlinks (a drive could link a folder to somewhere else). Folders that
+/// don't exist yet are judged by the nearest one that does, since that's
+/// where creating them would lead.
 fn inside(dest: &Path, path: &Path) -> bool {
-    match (dest.canonicalize(), path.parent().map(fs::canonicalize)) {
-        (Ok(d), Some(Ok(p))) => p.starts_with(d),
-        _ => false,
+    let Ok(d) = dest.canonicalize() else { return false };
+    let mut dir = path.parent();
+    while let Some(p) = dir {
+        if let Ok(p) = p.canonicalize() {
+            return p.starts_with(d);
+        }
+        dir = p.parent();
     }
+    false
 }
 
 // ---------- manifest ----------
@@ -370,7 +377,13 @@ fn copy_file(src: &Path, dst: &Path, cancel: &AtomicBool) -> Result<u64> {
     }
     let part = dst.with_file_name(format!("{}.part", dst.file_name().unwrap_or_default().to_string_lossy()));
     let mut input = fs::File::open(src).with_context(|| format!("reading {}", src.display()))?;
-    let mut out = fs::File::create(&part).with_context(|| format!("writing {}", part.display()))?;
+    // A leftover `.part` is removed, not opened: it could link elsewhere.
+    let _ = fs::remove_file(&part);
+    let mut out = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&part)
+        .with_context(|| format!("writing {}", part.display()))?;
     let mut buf = vec![0u8; 1 << 20];
     let mut total = 0u64;
     loop {
@@ -407,7 +420,7 @@ struct Job<'a> {
 /// Copy or convert one file into place, through a `.part` file.
 fn write_one(dest: &Path, job: &Job, cancel: &AtomicBool) -> Result<u64> {
     let target = native(dest, &job.rel);
-    if target.parent().is_some_and(Path::exists) && !inside(dest, &target) {
+    if !inside(dest, &target) {
         bail!("{} leads outside the destination", target.display());
     }
     let Some(conv) = job.conv else { return copy_file(Path::new(&job.track.path), &target, cancel) };
@@ -940,6 +953,33 @@ mod tests {
         let r = sync(&conn, &p);
         assert!(r.failed.iter().any(|f| f.contains("outside the destination")), "{r:?}");
         assert_eq!(fs::read(victim.join("Album/01 One.mp3")).unwrap(), vec![0u8; 1000]);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The same when the linked folder doesn't have the album folder yet, and
+    /// for a `.part` file on the drive that links to a file elsewhere.
+    #[cfg(unix)]
+    #[test]
+    fn links_planted_before_the_first_sync_are_not_followed() {
+        let (root, conn, _) = setup("planted");
+        let stick = root.join("stick");
+        let victim = root.join("victim");
+        fs::create_dir_all(&victim).unwrap();
+        std::os::unix::fs::symlink(&victim, stick.join("Artist")).unwrap();
+        let p = Profile { dest: stick.to_string_lossy().into(), whole_library: true, ..Default::default() };
+        let r = sync(&conn, &p);
+        assert!(r.failed.iter().any(|f| f.contains("outside the destination")), "{r:?}");
+        assert_eq!(fs::read_dir(&victim).unwrap().count(), 0, "nothing is created through the link");
+
+        fs::remove_file(stick.join("Artist")).unwrap();
+        fs::create_dir_all(stick.join("Artist/Album")).unwrap();
+        let precious = victim.join("precious.txt");
+        fs::write(&precious, b"keep me").unwrap();
+        std::os::unix::fs::symlink(&precious, stick.join("Artist/Album/01 One.mp3.part")).unwrap();
+        let r = sync(&conn, &p);
+        assert!(r.failed.is_empty(), "{r:?}");
+        assert_eq!(fs::read(&precious).unwrap(), b"keep me");
+        assert_eq!(fs::read(stick.join("Artist/Album/01 One.mp3")).unwrap().len(), 1000);
         let _ = fs::remove_dir_all(&root);
     }
 
