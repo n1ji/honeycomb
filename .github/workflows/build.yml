@@ -2,13 +2,11 @@ name: Build
 
 # Actions are pinned to commit hashes (the tag they were is in the comment).
 #
-# Alpha builds: push a tag made by scripts/release.sh, like v0.1.1 (builds macOS
-# and Windows, with that version's CHANGELOG.md section as the notes), or run
-# manually from the Actions tab and pick the platforms. Builds a universal macOS
-# .dmg, a Windows installer, and (on manual runs that ask for it) Linux
-# AppImage/.deb/.rpm packages, and attaches them to a draft pre-release.
-#
-# Linux joins tag builds when it's ready for a release: add it to the tag default in the plan job.
+# Alpha builds: push a tag made by scripts/release.sh, like v0.2.0 (builds macOS,
+# Windows and Linux, with that version's CHANGELOG.md section as the notes), or
+# run manually from the Actions tab and pick the platforms. Builds a universal
+# macOS .dmg, a Windows installer and Linux AppImage/.deb/.rpm packages, and
+# attaches them to a draft pre-release.
 on:
   push:
     tags: ["v*"]
@@ -30,7 +28,7 @@ jobs:
       - id: matrix
         shell: bash
         env:
-          WANT: ${{ github.event_name == 'workflow_dispatch' && inputs.platforms || 'macos,windows' }}
+          WANT: ${{ github.event_name == 'workflow_dispatch' && inputs.platforms || 'macos,windows,linux' }}
         run: |
           rows=()
           [[ ",$WANT," == *",macos,"* ]] && rows+=('{"name":"macos","platform":"macos-latest","args":"--target universal-apple-darwin"}')

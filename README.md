@@ -110,7 +110,7 @@ Tests: `cd src-tauri && cargo test` (smart playlists, the importer and the Kasek
 
 ## Release builds
 
-Pushing a tag made by `scripts/release.sh` (like `v0.2.0`) builds a universal macOS `.dmg` and the Windows installers, and attaches them to a draft pre-release. The **Build** workflow can also be run by hand from the Actions tab, picking the platforms; that's how the Linux packages (AppImage, .deb, .rpm) are built for now. Run on a tag, it adds them to that tag's release.
+Pushing a tag made by `scripts/release.sh` (like `v0.2.0`) builds a universal macOS `.dmg`, the Windows installers and the Linux packages (AppImage, .deb, .rpm), and attaches them to a draft pre-release. The **Build** workflow can also be run by hand from the Actions tab, picking the platforms. Run on a tag, it adds them to that tag's release.
 
 ## Project layout
 

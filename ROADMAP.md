@@ -32,7 +32,7 @@ These come first, ahead of the month order below:
 
 1. 🚀 **Remember unreadable files (#6, #2).** *Live in 0.2.0.* What's left for #2: look at the list on the real library to see why those 64 files fail. Store each file the scanner can't read with its mtime and the error, skip it on rescans until it changes, and list them in Settings → Library with a "Read again" button. The list also shows which formats fail and why.
 2. 🚀 **Show the loved flag.** *Live in 0.2.0.* A heart in the track list and player bar, and Love / Unlove in the context menu. Needed before loves sync with Last.fm.
-3. 🟡 **Linux on release tags.** *Linux packages are live in 0.2.0* (built with a manual run). Still to do: add Linux to the tag default in `.github/workflows/build.yml`, so release tags build it on their own.
+3. 🔧 **Linux on release tags.** *Done on dev:* release tags now build the Linux packages too. The distro test was the AppImage's self-test on Debian 13 (debsrv, under xvfb): the UI loaded in WebKitGTK, scanning worked and all 5 formats decoded. Still open: scrolling feel and real audio on a Linux desktop.
 4. **ReplayGain.** Read track and album gain and peak tags, apply them in Kaseki's gain stage (switching exactly at the gapless marker), with a setting (Off / Track / Album), clipping prevention from the peak, and a line in the signal path view.
 5. **Watch library folders.** Use the `notify` crate to start the quick rescan a moment after files change, so new music lands in the Inbox without "Rescan now". If a scan is already running, run another one when it finishes.
 6. **Album art grid view.** A grid of albums for whatever the column browser and search currently show, with cached cover thumbnails so it stays fast at 100k tracks. Click to filter to the album, double-click to play it.
@@ -71,7 +71,7 @@ Everything finished so far, including items that were planned for later months a
 
 - 🟡 **Decide:** public repo (since 2026-10-22) and keeping the name are decided; still open: when to buy the Apple Developer account.
 - 🚀 Change the app identifier to `dev.n1ji.honeycomb` and move the existing library database across automatically.
-- 🟡 Linux: AppImage, .deb and .rpm are live in 0.2.0. Still to do: build them on release tags automatically, and test on a real distro (the webview on Linux, WebKitGTK, is the main scrolling risk).
+- 🟡 Linux: AppImage, .deb and .rpm are live in 0.2.0 🚀, release tags build them on their own 🔧, and the self-test passed on Debian 13. Still open: scrolling feel and real audio on a Linux desktop (WebKitGTK scrolling is the main risk).
 - 🚀 Built-in auto-updater (Tauri updater with a signing key), live in 0.2.0. The first real test is updating 0.2.0 to the next release.
 - 🚀 A download page (honeycomb.n1ji.dev).
 - 🚀 Performance baseline: 100k-track library, see `docs/perf-baseline.md` (startup 0.95 s, search ~65 ms, sort ~70 ms).
