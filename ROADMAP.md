@@ -13,7 +13,7 @@ This is a plan, not a promise. Each month has a "done when" line. Whatever slips
 
 ---
 
-## Where things stand (reviewed 2026-11-01)
+## Where things stand (reviewed 2026-11-06)
 
 October went faster than planned: most of Months 1–4 is already built. Every item in this file carries one of these marks:
 
@@ -26,12 +26,12 @@ October went faster than planned: most of Months 1–4 is already built. Every i
 
 To check yourself: `git log --oneline v0.2.0..origin/dev` lists what's on dev but not released, and `git log --oneline origin/dev..dev` lists local commits that aren't pushed yet.
 
-**Next up (picked 2026-10-31, aimed at 0.2)**
+**Next up (picked 2026-10-31; 1 and 2 shipped in 0.2.0, the rest is aimed at 0.3)**
 
 These come first, ahead of the month order below:
 
-1. 🚀 **Remember unreadable files (#6, #2).** *Live in 0.2.0.* What's left for #2: look at the list on the real library to see why those 64 files fail. Store each file the scanner can't read with its mtime and the error, skip it on rescans until it changes, and list them in Settings → Library with a "Read again" button. The list also shows which formats fail and why.
-2. 🚀 **Show the loved flag.** *Live in 0.2.0.* A heart in the track list and player bar, and Love / Unlove in the context menu. Needed before loves sync with Last.fm.
+1. 🚀 **Remember unreadable files (#6, #2).** *Live in 0.2.0.* What's left for #2: look at Settings → Library → Unreadable files on the Windows library to see why those 64 files fail.
+2. 🚀 **Show the loved flag.** *Live in 0.2.0.* Hearts in the track list, the track menu and Now Playing. Next step: loves sync with Last.fm (Month 2).
 3. 🔧 **Linux on release tags.** *Done on dev:* release tags now build the Linux packages too. The distro test was the AppImage's self-test on Debian 13 (debsrv, under xvfb): the UI loaded in WebKitGTK, scanning worked and all 5 formats decoded. Still open: scrolling feel and real audio on a Linux desktop.
 4. **ReplayGain.** Read track and album gain and peak tags, apply them in Kaseki's gain stage (switching exactly at the gapless marker), with a setting (Off / Track / Album), clipping prevention from the peak, and a line in the signal path view.
 5. **Watch library folders.** Use the `notify` crate to start the quick rescan a moment after files change, so new music lands in the Inbox without "Rescan now". If a scan is already running, run another one when it finishes.
@@ -65,7 +65,7 @@ Everything finished so far, including items that were planned for later months a
 - 🚀 Multi-pick and right-click in the column browser.
 - 🚀 Listening history (what played, when, and how it ended), off until the user turns it on. The groundwork for sound-based playlists.
 - 🚀 Setup screen for new users (and once for existing ones), smoother motion, clickable artist and album names, Shuffle in the track menu.
-- Multi-device plan over OpenSubsonic (`docs/ARCHITECTURE.md`): approved, a document only, nothing built.
+- Multi-device plan over OpenSubsonic (`docs/ARCHITECTURE.md`): approved, a document only, nothing built. The phone page (honeycomb.n1ji.dev/mobile) now describes it: the phone works on its own, with the desktop or with a music server.
 
 ## Month 1 (November): ship something people can install
 
@@ -80,7 +80,6 @@ Everything finished so far, including items that were planned for later months a
 **Done in November** (including items moved up from later months; all live in 0.2.0):
 
 - 🚀 Linux packages (AppImage, .deb, .rpm) in a release for the first time.
-
 - 🚀 Hearts for loved songs: a ♥ column, Love / Unlove in the track menu, and a heart in Now Playing (from "Next up").
 - 🚀 Unreadable files are remembered with the reason and skipped until they change; Settings → Library lists them (#6, was Month 5).
 - 🚀 Drag to reorder playlists and the queue; the playing song keeps playing. Dragging onto sidebar playlists works on Mac now too (was Month 6).
