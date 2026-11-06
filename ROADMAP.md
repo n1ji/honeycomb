@@ -13,26 +13,26 @@ This is a plan, not a promise. Each month has a "done when" line. Whatever slips
 
 ---
 
-## Where things stand (reviewed 2026-11-01)
+## Where things stand (reviewed 2026-11-06)
 
 October went faster than planned: most of Months 1–4 is already built. Every item in this file carries one of these marks:
 
 | Mark | Meaning |
 | --- | --- |
-| 🚀 | **Live:** in the newest release (0.1.1), so people who download Honeycomb have it |
+| 🚀 | **Live:** in a published release (newest: 0.2.0, 2026-11-03), so people who download Honeycomb have it |
 | 🔧 | **On dev:** done and pushed to `dev`, waiting for the next release (listed under "Unreleased" in `CHANGELOG.md`) |
 | 🟡 | Partly done, or done but not tested yet (the note says which, and whether it's live) |
 | (none) | Not started |
 
-To check yourself: `git log --oneline v0.1.1..origin/dev` lists what's on dev but not released, and `git log --oneline origin/dev..dev` lists local commits that aren't pushed yet.
+To check yourself: `git log --oneline v0.2.0..origin/dev` lists what's on dev but not released, and `git log --oneline origin/dev..dev` lists local commits that aren't pushed yet.
 
-**Next up (picked 2026-10-31, aimed at 0.2)**
+**Next up (picked 2026-10-31; 1 and 2 shipped in 0.2.0, the rest is aimed at 0.3)**
 
 These come first, ahead of the month order below:
 
-1. 🔧 **Remember unreadable files (#6, #2).** *Done on dev.* What's left for #2: look at the list on the real library to see why those 64 files fail. Store each file the scanner can't read with its mtime and the error, skip it on rescans until it changes, and list them in Settings → Library with a "Read again" button. The list also shows which formats fail and why.
-2. 🔧 **Show the loved flag.** *Done on dev.* A heart in the track list and player bar, and Love / Unlove in the context menu. Needed before loves sync with Last.fm.
-3. **Linux on release tags.** After one test on a real distro, add Linux to the tag default in `.github/workflows/build.yml` (today it only builds on manual runs).
+1. 🚀 **Remember unreadable files (#6, #2).** *Live in 0.2.0.* What's left for #2: look at Settings → Library → Unreadable files on the Windows library to see why those 64 files fail.
+2. 🚀 **Show the loved flag.** *Live in 0.2.0.* Hearts in the track list, the track menu and Now Playing. Next step: loves sync with Last.fm (Month 2).
+3. 🔧 **Linux on release tags.** *Done on dev:* release tags now build the Linux packages too. The distro test was the AppImage's self-test on Debian 13 (debsrv, under xvfb): the UI loaded in WebKitGTK, scanning worked and all 5 formats decoded. Still open: scrolling feel and real audio on a Linux desktop.
 4. **ReplayGain.** Read track and album gain and peak tags, apply them in Kaseki's gain stage (switching exactly at the gapless marker), with a setting (Off / Track / Album), clipping prevention from the peak, and a line in the signal path view.
 5. **Watch library folders.** Use the `notify` crate to start the quick rescan a moment after files change, so new music lands in the Inbox without "Rescan now". If a scan is already running, run another one when it finishes.
 6. **Album art grid view.** A grid of albums for whatever the column browser and search currently show, with cached cover thumbnails so it stays fast at 100k tracks. Click to filter to the album, double-click to play it.
@@ -55,34 +55,35 @@ Everything finished so far, including items that were planned for later months a
 - 🚀 Lyrics: embedded, `.lrc` files and online lookup, synced lines highlighted (was Month 5).
 - 🚀 Media keys and the system Now Playing display.
 
-**On dev, coming in the next release**
+**Live in 0.2.0** (published 2026-11-03)
 
-- 🔧 In-app updates: signed releases install from the update bulb.
-- 🔧 Quality badge and signal path view; bit depth column and smart rule.
-- 🔧 Converting while syncing (was Month 4): lossless → MP3, AAC, Ogg Vorbis or 16-bit FLAC, re-syncs only convert what changed. Built-in encoders instead of ffmpeg, so there's no license question. AAC is macOS-only for now (`afconvert`).
-- 🔧 Moving or renaming files keeps their play counts, ratings and playlist spots.
-- 🔧 Inbox as a waiting room for new files, and ignored files.
-- 🔧 Multi-pick and right-click in the column browser.
-- 🔧 Listening history (what played, when, and how it ended), off until the user turns it on. The groundwork for sound-based playlists.
-- 🔧 Setup screen for new users (and once for existing ones), smoother motion, clickable artist and album names, Shuffle in the track menu.
-- 🔧 Multi-device plan over OpenSubsonic (`docs/ARCHITECTURE.md`): approved, a document only, nothing built.
+- 🚀 In-app updates: signed releases install from the update bulb.
+- 🚀 Quality badge and signal path view; bit depth column and smart rule.
+- 🚀 Converting while syncing (was Month 4): lossless → MP3, AAC, Ogg Vorbis or 16-bit FLAC, re-syncs only convert what changed. Built-in encoders instead of ffmpeg, so there's no license question. AAC is macOS-only for now (`afconvert`).
+- 🚀 Moving or renaming files keeps their play counts, ratings and playlist spots.
+- 🚀 Inbox as a waiting room for new files, and ignored files.
+- 🚀 Multi-pick and right-click in the column browser.
+- 🚀 Listening history (what played, when, and how it ended), off until the user turns it on. The groundwork for sound-based playlists.
+- 🚀 Setup screen for new users (and once for existing ones), smoother motion, clickable artist and album names, Shuffle in the track menu.
+- Multi-device plan over OpenSubsonic (`docs/ARCHITECTURE.md`): approved, a document only, nothing built. The phone page (honeycomb.n1ji.dev/mobile) now describes it: the phone works on its own, with the desktop or with a music server.
 
 ## Month 1 (November): ship something people can install
 
 - 🟡 **Decide:** public repo (since 2026-10-22) and keeping the name are decided; still open: when to buy the Apple Developer account.
 - 🚀 Change the app identifier to `dev.n1ji.honeycomb` and move the existing library database across automatically.
-- 🟡 Linux in CI (live in the workflow): AppImage, .deb and .rpm build on manual runs. Still to do: test on a real distro, then add Linux to tag builds. The webview on Linux (WebKitGTK) is the main scrolling risk.
-- 🔧 Built-in auto-updater (Tauri updater with a signing key; first release with it is the next one).
+- 🟡 Linux: AppImage, .deb and .rpm are live in 0.2.0 🚀, release tags build them on their own 🔧, and the self-test passed on Debian 13. Still open: scrolling feel and real audio on a Linux desktop (WebKitGTK scrolling is the main risk).
+- 🚀 Built-in auto-updater (Tauri updater with a signing key), live in 0.2.0. The first real test is updating 0.2.0 to the next release.
 - 🚀 A download page (honeycomb.n1ji.dev).
 - 🚀 Performance baseline: 100k-track library, see `docs/perf-baseline.md` (startup 0.95 s, search ~65 ms, sort ~70 ms).
 - 🟡 Fix: removing the playing track stops playback (#4), and audio dies when headphones are unplugged (#5). Fixed in code and live in 0.1.1, still needs a listening test.
 
-**Done in November** (including items moved up from later months):
+**Done in November** (including items moved up from later months; all live in 0.2.0):
 
-- 🔧 Hearts for loved songs: a ♥ column, Love / Unlove in the track menu, and a heart in Now Playing (from "Next up").
-- 🔧 Unreadable files are remembered with the reason and skipped until they change; Settings → Library lists them (#6, was Month 5).
-- 🔧 Drag to reorder playlists and the queue; the playing song keeps playing. Dragging onto sidebar playlists works on Mac now too (was Month 6).
-- 🔧 Sync artists and albums to a device, not just playlists; later syncs pick up their new albums too (not on the plan, added along the way).
+- 🚀 Linux packages (AppImage, .deb, .rpm) in a release for the first time.
+- 🚀 Hearts for loved songs: a ♥ column, Love / Unlove in the track menu, and a heart in Now Playing (from "Next up").
+- 🚀 Unreadable files are remembered with the reason and skipped until they change; Settings → Library lists them (#6, was Month 5).
+- 🚀 Drag to reorder playlists and the queue; the playing song keeps playing. Dragging onto sidebar playlists works on Mac now too (was Month 6).
+- 🚀 Sync artists and albums to a device, not just playlists; later syncs pick up their new albums too (not on the plan, added along the way).
 
 **Done when:** a stranger can download an alpha for Mac or Linux, install it, and receive the next update automatically.
 
