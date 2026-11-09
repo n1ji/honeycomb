@@ -118,10 +118,7 @@ fn start(cache: &Path, request: impl FnOnce() -> ureq::Request) -> io::Result<Ar
 }
 
 fn fetch(dl: &Download, req: ureq::Request, mut out: File, dest: &Path) -> Result<(), String> {
-    let resp = req.call().map_err(|e| match e {
-        ureq::Error::Status(code, _) => format!("The server answered {code}"),
-        e => format!("Can't reach the server: {e}"),
-    })?;
+    let resp = req.call().map_err(|e| crate::subsonic::describe(&e))?;
     if resp.content_type().contains("json") || resp.content_type().contains("xml") {
         // Subsonic reports errors as a 200 with a JSON body.
         let mut body = String::new();

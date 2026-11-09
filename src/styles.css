@@ -2063,3 +2063,36 @@ input[type="color"] {
     transition-duration: 1ms !important;
   }
 }
+
+.server-row {
+  align-items: flex-start !important;
+}
+
+.server-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.server-info {
+  font-size: 0.85em;
+  white-space: normal !important;
+}
+
+.server-error {
+  color: #e03131;
+  font-size: 0.85em;
+  white-space: normal !important;
+}
+
+.offline-mark {
+  color: var(--accent);
+  font-size: 0.7em;
+  margin-right: 5px;
+  vertical-align: 1px;
+}
+
+.modal .server-error {
+  overflow-wrap: anywhere;
+}

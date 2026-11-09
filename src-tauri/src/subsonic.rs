@@ -121,9 +121,7 @@ impl Client {
         }
         let resp = match r.call() {
             Ok(resp) => resp,
-            Err(ureq::Error::Status(401, _)) => bail!("The server didn't accept the username or password"),
-            Err(ureq::Error::Status(code, _)) => bail!("The server answered {code} to {endpoint}"),
-            Err(e) => return Err(anyhow!("Can't reach the server: {e}")),
+            Err(e) => bail!(describe(&e)),
         };
         let body: Value = crate::net::read_json(resp, MAX_ANSWER).with_context(|| format!("{endpoint}: not a Subsonic answer"))?;
         let inner = body.get("subsonic-response").cloned().ok_or_else(|| anyhow!("{endpoint}: not a Subsonic answer"))?;
@@ -264,6 +262,19 @@ impl Client {
 
     pub fn cover(&self, id: &str, size: u32) -> ureq::Request {
         self.request("getCoverArt").query("id", id).query("size", &size.to_string())
+    }
+}
+
+/// A request error for people to read. ureq's own messages include the URL,
+/// and with it the login token, so they're never shown or logged.
+pub fn describe(e: &ureq::Error) -> String {
+    match e {
+        ureq::Error::Status(401 | 403, _) => "The server didn't accept the username or password".into(),
+        ureq::Error::Status(code, _) => format!("The server answered with error {code}"),
+        ureq::Error::Transport(t) => {
+            let why = t.message().filter(|m| !m.contains("?")).map(|m| format!(" ({m})")).unwrap_or_default();
+            format!("Can't reach the server: {}{why}", t.kind())
+        }
     }
 }
 
@@ -445,6 +456,14 @@ pub(crate) mod tests {
         assert_eq!(info.kind, "fake");
         assert_eq!(info.version, "0.64.2");
         assert_eq!(info.extensions, ["songLyrics", "apiKeyAuthentication"]);
+    }
+
+    #[test]
+    fn errors_never_show_the_login() {
+        let c = Client::new("http://127.0.0.1:9", "ann", Auth::Password("sesame".into()));
+        let e = c.ping().unwrap_err().to_string();
+        assert!(e.starts_with("Can't reach the server"), "{e}");
+        assert!(!e.contains("ann") && !e.contains("t=") && !e.contains("rest/"), "{e}");
     }
 
     #[test]

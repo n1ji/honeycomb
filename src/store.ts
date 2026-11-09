@@ -1,4 +1,4 @@
-import { api, Playlist, QueueState, Signal, Tick, Track } from "./api";
+import { api, Playlist, QueueState, RemoteState, Signal, Tick, Track } from "./api";
 
 export type View = { kind: "library" } | { kind: "inbox" } | { kind: "queue" } | { kind: "playlist"; id: number };
 
@@ -22,6 +22,8 @@ class Store {
   tracks = new Map<number, Track>();
   playlists: Playlist[] = [];
   settings: Record<string, string> = {};
+  /** Songs on a server, and whether they're kept on this computer. Empty without servers. */
+  remote = new Map<number, RemoteState>();
 
   view: View = { kind: "library" };
   /** Track ids that make up the current view, before browser filters and search. */
@@ -70,6 +72,12 @@ class Store {
     this.tracksVersion++;
     this.emit("tracks");
     await this.refreshView(background ? "keepScroll" : "reset");
+  }
+
+  async loadRemote() {
+    const { ids, states } = await api.remoteStates();
+    this.remote = new Map(ids.map((id, i) => [id, states[i]]));
+    this.emit("tracks");
   }
 
   async loadPlaylists() {

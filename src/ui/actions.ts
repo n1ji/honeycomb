@@ -29,6 +29,9 @@ export function openTrackMenu(x: number, y: number, group?: number[], pick?: Syn
   const manual = store.playlists.filter((p) => p.kind === "manual");
   const view = store.view;
   const pl = store.currentPlaylist;
+  // Songs on a server have no file to edit or show, and whole-star ratings (C3).
+  const remote = ids.filter((id) => store.remote.has(id));
+  const allRemote = remote.length === ids.length;
 
   const items: MenuItem[] = [
     { label: "Play", action: () => run(() => api.load(ids, 0)) },
@@ -47,7 +50,7 @@ export function openTrackMenu(x: number, y: number, group?: number[], pick?: Syn
     ...(pick && (pick.artists.length || pick.albums.length) ? [{ label: `Sync ${pickName(pick)} to a device…`, action: () => openSync(pick) }] : []),
     {
       label: "Rating",
-      submenu: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((r) => ({
+      submenu: (remote.length ? [0, 2, 4, 6, 8, 10] : [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]).map((r) => ({
         label: r ? starsText(r) : "No rating",
         action: () => run(() => setRating(ids, r)),
       })),
@@ -56,13 +59,18 @@ export function openTrackMenu(x: number, y: number, group?: number[], pick?: Syn
       const loved = ids.every((id) => store.tracks.get(id)?.loved);
       return { label: loved ? "Unlove" : "Love", action: () => run(() => setLoved(ids, !loved)) };
     })(),
-    { label: ids.length > 1 ? `Edit tags (${ids.length} tracks)…` : "Edit tags…", action: () => openTagEditor(ids.map((id) => store.tracks.get(id)!)) },
+    {
+      label: ids.length > 1 ? `Edit tags (${ids.length} tracks)…` : "Edit tags…",
+      disabled: allRemote,
+      action: () => openTagEditor(ids.map((id) => store.tracks.get(id)!).filter((t) => !store.remote.has(t.id))),
+    },
     {
       label: "Show in folder",
-      disabled: ids.length !== 1,
+      disabled: ids.length !== 1 || allRemote,
       action: () => run(() => revealItemInDir(store.tracks.get(ids[0])!.path)),
     },
   ];
+  if (remote.length) items.push(SEP, ...offlineItems(remote, !!(group && pick?.albums.length)));
   const inbox = ids.filter((id) => store.tracks.get(id)?.inbox);
   if (inbox.length) {
     items.push(
@@ -78,6 +86,37 @@ export function openTrackMenu(x: number, y: number, group?: number[], pick?: Syn
     items.push(SEP, { label: "Remove from playlist", action: () => removeSelected() });
   }
   openMenu(x, y, items);
+}
+
+/** Keeping server songs on this computer, or letting them go. */
+function offlineItems(ids: number[], albums: boolean): MenuItem[] {
+  const online = ids.filter((id) => store.remote.get(id) === "remote");
+  const kept = ids.filter((id) => store.remote.get(id) !== "remote");
+  const out: MenuItem[] = [];
+  if (online.length) {
+    out.push({
+      label: albums ? "Keep album offline" : "Make available offline",
+      action: () =>
+        run(async () => {
+          await api.remotePin(ids, albums);
+          await store.loadRemote();
+          toast(`Downloading ${online.length === 1 ? "1 song" : `${online.length} songs`} to this computer…`);
+        }),
+    });
+  }
+  if (kept.length) {
+    out.push({
+      label: "Remove offline copy",
+      action: () =>
+        run(async () => {
+          const gone = kept.filter((id) => store.remote.get(id) === "local-only").length;
+          if (gone && !(await ask(`${gone === 1 ? "1 song is" : `${gone} songs are`} no longer on the server, so removing the copy removes the song from your library. Remove anyway?`, { title: "Remove offline copy", kind: "warning" })))
+            return;
+          await api.remoteUnpin(kept);
+        }),
+    });
+  }
+  return out;
 }
 
 /** "this artist", "these 3 albums" and so on. */

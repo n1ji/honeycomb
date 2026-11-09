@@ -694,6 +694,7 @@ pub fn flush(conn: &Connection) -> Result<usize> {
         match result {
             Ok(()) => {
                 conn.execute("DELETE FROM remote_outbox WHERE id = ?1", [w.id])?;
+                set_error(conn, w.source, None)?;
                 sent += 1;
             }
             Err(e) if e.to_string().starts_with("The server refused") => {
@@ -809,7 +810,7 @@ pub fn download_next(conn: &Connection) -> Result<Option<i64>> {
     let cached = stream_cache_path(source, &rid, &suffix, None);
     if fs::rename(&cached, &dest).is_err() || !dest.is_file() {
         let client = client(conn, source)?;
-        let resp = client.download(&rid).call().map_err(|e| anyhow!("Downloading failed: {e}"))?;
+        let resp = client.download(&rid).call().map_err(|e| anyhow!("Downloading failed: {}", crate::subsonic::describe(&e)))?;
         if resp.content_type().contains("json") {
             conn.execute("UPDATE remote_tracks SET state = 'remote' WHERE track_id = ?1", [track_id])?;
             bail!("The server refused to send {rid}");
@@ -1279,5 +1280,34 @@ mod tests {
         let r = remove_source(&mut conn, id, None).unwrap();
         assert_eq!(r.deleted, northern.len());
         assert!(db::all_tracks(&conn).unwrap().is_empty());
+    }
+
+    /// How long a big library takes: `HONEYCOMB_NAVIDROME=… cargo test --release --lib live_sync_timing -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn live_sync_timing() {
+        let Ok(url) = std::env::var("HONEYCOMB_NAVIDROME") else { return };
+        let dir = std::env::temp_dir().join(format!("honeycomb-timing-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let mut conn = db::open(&dir.join("library.db")).unwrap();
+        db::migrate(&conn).unwrap();
+        migrate(&conn).unwrap();
+        let id = add_source(&conn, &url, "honeycomb", "honeycomb-test").unwrap();
+        let c = client(&conn, id).unwrap();
+        let t = std::time::Instant::now();
+        let pulled = pull(&c, &|_| {}).unwrap();
+        let fetched = t.elapsed();
+        let r = apply(&mut conn, id, &pulled).unwrap();
+        let first = t.elapsed() - fetched;
+        let t = std::time::Instant::now();
+        apply(&mut conn, id, &pulled).unwrap();
+        let again = t.elapsed();
+        let t = std::time::Instant::now();
+        let (ids, _) = states(&conn).unwrap();
+        let st = t.elapsed();
+        println!("{} songs: fetched in {fetched:?}, first apply {first:?}, re-sync apply {again:?}, states for the UI {st:?}", r.tracks);
+        assert_eq!(ids.len(), r.tracks);
+        remove_source(&mut conn, id, None).unwrap();
     }
 }
