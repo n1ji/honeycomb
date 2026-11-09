@@ -39,7 +39,6 @@ impl Download {
         self.cv.notify_all();
     }
 
-    /// Wait until `f` holds, or the download fails or stops moving.
     fn wait(&self, f: impl Fn(&Progress) -> bool) -> io::Result<std::sync::MutexGuard<'_, Progress>> {
         let mut st = self.lock();
         let mut last = (st.have, Instant::now());
@@ -63,7 +62,6 @@ impl Download {
     }
 }
 
-/// What a song's audio is read from.
 pub enum Opened {
     File(File),
     Stream(Reader),
@@ -83,7 +81,6 @@ pub fn open(cache: &Path, request: impl FnOnce() -> ureq::Request) -> io::Result
     Ok(Opened::Stream(Reader { dl, file, pos: 0 }))
 }
 
-/// Start fetching `cache` in the background unless it's there or on its way.
 pub fn prefetch(cache: &Path, request: impl FnOnce() -> ureq::Request) {
     if !cache.is_file() {
         let _ = start(cache, request);
@@ -215,7 +212,6 @@ impl symphonia::core::io::MediaSource for Reader {
     }
 }
 
-/// Delete the least recently played cache files until `dir` holds at most `max` bytes.
 pub fn trim(dir: &Path, max: u64) {
     let Ok(rd) = fs::read_dir(dir) else { return };
     let mut files: Vec<(SystemTime, u64, PathBuf)> = rd
@@ -243,7 +239,6 @@ mod tests {
     use super::*;
     use std::net::TcpListener;
 
-    /// Serves `body` in `chunks` pieces, `gap` apart.
     fn slow_server(body: Vec<u8>, chunks: usize, gap: Duration) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}/", listener.local_addr().unwrap());

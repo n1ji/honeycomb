@@ -14,9 +14,7 @@ const MAX_ANSWER: u64 = 32 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Auth {
-    /// Legacy salted token: every request sends md5(password + salt).
     Password(String),
-    /// OpenSubsonic `apiKeyAuthentication`.
     ApiKey(String),
 }
 
@@ -78,10 +76,8 @@ pub struct Playlist {
     pub entry: Vec<Song>,
 }
 
-/// What `ping` and `getOpenSubsonicExtensions` say about a server.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ServerInfo {
-    /// "navidrome", "gonic"… when the server says.
     pub kind: String,
     pub version: String,
     pub open_subsonic: bool,
@@ -97,7 +93,6 @@ impl Client {
         Client { base: normalize_url(base), user: user.to_string(), auth, agent }
     }
 
-    /// A request to `endpoint` with the auth and format parameters set.
     pub fn request(&self, endpoint: &str) -> ureq::Request {
         let r = self
             .agent
@@ -161,7 +156,6 @@ impl Client {
         Ok(info)
     }
 
-    /// One page of every song, through an empty `search3`.
     pub fn songs_page(&self, offset: usize, count: usize) -> Result<Vec<Song>> {
         #[derive(Deserialize, Default)]
         #[serde(default)]
@@ -174,7 +168,6 @@ impl Client {
         Ok(r.song)
     }
 
-    /// A page of album ids, for servers where an empty `search3` finds nothing.
     pub fn album_ids_page(&self, offset: usize, count: usize) -> Result<Vec<String>> {
         #[derive(Deserialize, Default)]
         #[serde(default)]
@@ -204,7 +197,6 @@ impl Client {
         self.get("getPlaylist", &[("id", id)], "playlist")
     }
 
-    /// Create a playlist, or with `id` replace an existing one's songs. Returns its id.
     pub fn save_playlist(&self, id: Option<&str>, name: &str, songs: &[String]) -> Result<String> {
         let mut params: Vec<(&str, &str)> = match id {
             Some(id) => vec![("playlistId", id)],
@@ -237,7 +229,6 @@ impl Client {
         self.call(if on { "star" } else { "unstar" }, &[("id", id)]).map(drop)
     }
 
-    /// Whole stars, 0 clears.
     pub fn set_rating(&self, id: &str, stars: u8) -> Result<()> {
         self.call("setRating", &[("id", id), ("rating", &stars.min(5).to_string())]).map(drop)
     }
@@ -247,7 +238,6 @@ impl Client {
         self.call("scrobble", &[("id", id), ("time", &ms), ("submission", "true")]).map(drop)
     }
 
-    /// The audio of a song: the original file, or transcoded to `format` at `kbps`.
     pub fn stream(&self, id: &str, transcode: Option<(&str, u32)>) -> ureq::Request {
         let r = self.request("stream").query("id", id);
         match transcode {
@@ -278,8 +268,6 @@ pub fn describe(e: &ureq::Error) -> String {
     }
 }
 
-/// "music.example.com:4533/" → "https://music.example.com:4533". Plain
-/// http is kept only when asked for, or for local addresses.
 pub fn normalize_url(s: &str) -> String {
     let s = s.trim().trim_end_matches('/');
     let s = s.strip_suffix("/rest").unwrap_or(s);
@@ -304,7 +292,6 @@ fn token(password: &str, salt: &str) -> String {
     Md5::digest(format!("{password}{salt}").as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Seconds since the epoch from an ISO 8601 time ("2026-11-09T09:18:38.79+02:00").
 pub fn parse_time(s: &str) -> Option<i64> {
     let b = s.as_bytes();
     if b.len() < 19 || b[4] != b'-' || b[10] != b'T' {
@@ -342,8 +329,6 @@ pub(crate) mod tests {
 
     pub type Handler = Arc<dyn Fn(&str, &HashMap<String, Vec<String>>) -> (u16, String) + Send + Sync>;
 
-    /// A small fake Subsonic server: `handler` gets the endpoint and query and
-    /// returns a status and body. Every request is logged.
     pub fn fake(handler: Handler) -> (String, Arc<Mutex<Vec<(String, HashMap<String, Vec<String>>)>>>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());

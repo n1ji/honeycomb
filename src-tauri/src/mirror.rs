@@ -76,8 +76,6 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-// ---------- process-wide context ----------
-
 struct Ctx {
     db_path: PathBuf,
     data_dir: PathBuf,
@@ -87,7 +85,6 @@ struct Ctx {
 static CTX: OnceLock<Ctx> = OnceLock::new();
 static WORK: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
 
-/// Where the library and its caches live; needed before anything streams.
 pub fn init(db_path: &Path, data_dir: &Path) {
     let _ = CTX.set(Ctx { db_path: db_path.into(), data_dir: data_dir.into(), clients: Mutex::default() });
 }
@@ -96,13 +93,11 @@ fn ctx() -> Result<&'static Ctx> {
     CTX.get().ok_or_else(|| anyhow!("server sources aren't set up"))
 }
 
-/// Wake the background worker: something is waiting to be sent or downloaded.
 pub fn poke() {
     *WORK.0.lock().unwrap_or_else(|e| e.into_inner()) = true;
     WORK.1.notify_all();
 }
 
-/// Block until poked or `timeout` passes.
 pub fn wait_for_work(timeout: Duration) {
     let mut w = WORK.0.lock().unwrap_or_else(|e| e.into_inner());
     if !*w {
@@ -115,7 +110,6 @@ fn secret_key(id: i64) -> String {
     format!("secret.server.{id}.password")
 }
 
-/// A client for source `id`, with its password from the keychain.
 pub fn client(conn: &Connection, id: i64) -> Result<Client> {
     if let Some(c) = CTX.get().and_then(|x| x.clients.lock().ok()?.get(&id).cloned()) {
         return Ok(c);
@@ -137,8 +131,6 @@ fn forget_client(id: i64) {
         x.clients.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
     }
 }
-
-// ---------- sources ----------
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -182,8 +174,6 @@ pub fn sources(conn: &Connection) -> Result<Vec<SourceRow>> {
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
-/// Check the address and login, then save the server. A blank username with a
-/// server that offers API keys means `password` is an API key.
 pub fn add_source(conn: &Connection, url: &str, username: &str, password: &str) -> Result<i64> {
     let probe = Client::new(url, username, Auth::Password(password.into()));
     let first = probe.ping();
@@ -226,8 +216,6 @@ pub fn set_error(conn: &Connection, id: i64, error: Option<&str>) -> Result<()> 
     Ok(())
 }
 
-/// Forget a server. Its offline files either move to `keep` and become
-/// ordinary local tracks (stats and playlist spots kept), or are deleted.
 pub fn remove_source(conn: &mut Connection, id: i64, keep: Option<&Path>) -> Result<RemoveReport> {
     let kept_files: Vec<(i64, String, Track)> = {
         let mut stmt = conn.prepare(
@@ -327,9 +315,6 @@ fn unique_path(p: &Path) -> PathBuf {
     (2..).map(|n| p.with_file_name(format!("{stem} ({n}).{ext}"))).find(|q| !q.exists()).unwrap_or_else(|| p.into())
 }
 
-// ---------- the mirror ----------
-
-/// Everything a sync pulls from the server, fetched before the database is touched.
 pub struct Pulled {
     pub songs: Vec<Song>,
     pub playlists: Vec<Playlist>,
@@ -347,7 +332,6 @@ pub fn pull(client: &Client, progress: &dyn Fn(usize)) -> Result<Pulled> {
         }
     }
     if songs.is_empty() {
-        // Not every server lists everything for an empty search.
         let mut offset = 0;
         loop {
             let ids = client.album_ids_page(offset, PAGE)?;
@@ -382,7 +366,6 @@ pub fn path_for(source: i64, remote_id: &str) -> String {
     format!("{SCHEME}{source}/{remote_id}")
 }
 
-/// `subsonic://3/abc` → (3, "abc").
 pub fn parse_path(path: &str) -> Option<(i64, &str)> {
     let (sid, rid) = path.strip_prefix(SCHEME)?.split_once('/')?;
     Some((sid.parse().ok()?, rid))
@@ -423,7 +406,6 @@ fn to_track(source: i64, s: &Song) -> Track {
     }
 }
 
-/// Bring the mirror of `source` in line with what was pulled.
 pub fn apply(conn: &mut Connection, source: i64, pulled: &Pulled) -> Result<SyncReport> {
     let tx = conn.transaction()?;
     let mut report = SyncReport::default();
@@ -554,7 +536,6 @@ fn apply_playlists(
     Ok(seen.len())
 }
 
-/// Track ids and states of every mirrored song, for the UI.
 pub fn states(conn: &Connection) -> Result<(Vec<i64>, Vec<String>)> {
     let mut stmt = conn.prepare("SELECT track_id, state FROM remote_tracks")?;
     let mut ids = Vec::new();
@@ -567,8 +548,6 @@ pub fn states(conn: &Connection) -> Result<(Vec<i64>, Vec<String>)> {
     }
     Ok((ids, st))
 }
-
-// ---------- changes going back ----------
 
 fn remote_of(conn: &Connection, track_id: i64) -> Result<Option<(i64, String)>> {
     Ok(conn
@@ -587,7 +566,6 @@ fn queue(conn: &Connection, source: i64, kind: &str, target: &str, value: i64, r
     Ok(())
 }
 
-/// A remote song was played: the server counts it once it hears about it.
 pub fn note_play(conn: &Connection, track_id: i64, when: i64) -> Result<()> {
     if let Some((source, rid)) = remote_of(conn, track_id)? {
         queue(conn, source, "play", &rid, when, false)?;
@@ -627,8 +605,6 @@ pub fn queue_rating(conn: &Connection, ids: &[i64], rating: u8) -> Result<()> {
     Ok(())
 }
 
-/// The server a playlist belongs to: the one it came from, or for a playlist
-/// made here, the one all its songs are on.
 fn playlist_source(conn: &Connection, playlist: i64) -> Result<Option<i64>> {
     if let Some(s) = conn.query_row("SELECT source_id FROM remote_playlists WHERE playlist_id = ?1", [playlist], |r| r.get(0)).optional()? {
         return Ok(Some(s));
@@ -646,7 +622,6 @@ fn playlist_source(conn: &Connection, playlist: i64) -> Result<Option<i64>> {
     Ok(if n > 0 && local == 0 && sources == 1 { source } else { None })
 }
 
-/// A playlist changed here; send it to its server, if it has one.
 pub fn queue_playlist(conn: &Connection, playlist: i64) -> Result<()> {
     if let Some(source) = playlist_source(conn, playlist)? {
         queue(conn, source, "playlist", &playlist.to_string(), 0, true)?;
@@ -655,7 +630,6 @@ pub fn queue_playlist(conn: &Connection, playlist: i64) -> Result<()> {
     Ok(())
 }
 
-/// Call before deleting a playlist here, so the server's copy goes too.
 pub fn queue_playlist_delete(conn: &Connection, playlist: i64) -> Result<()> {
     let linked: Option<(i64, String)> = conn
         .query_row("SELECT source_id, remote_id FROM remote_playlists WHERE playlist_id = ?1", [playlist], |r| Ok((r.get(0)?, r.get(1)?)))
@@ -743,10 +717,6 @@ fn send(conn: &Connection, c: &crate::subsonic::Client, w: &Waiting) -> Result<(
     }
 }
 
-// ---------- offline copies ----------
-
-/// Keep songs on this computer. With `albums`, their whole albums are kept,
-/// including songs added to them later.
 pub fn pin(conn: &Connection, ids: &[i64], albums: bool) -> Result<usize> {
     if albums {
         for id in ids {
@@ -770,7 +740,6 @@ pub fn pin(conn: &Connection, ids: &[i64], albums: bool) -> Result<usize> {
     Ok(conn.query_row("SELECT COUNT(*) FROM remote_tracks WHERE state = 'downloading'", [], |r| r.get::<_, i64>(0))? as usize)
 }
 
-/// Stop keeping songs offline and delete their files. Their albums stop being kept too.
 pub fn unpin(conn: &Connection, ids: &[i64]) -> Result<()> {
     for id in ids {
         let row: Option<(Option<String>, i64, Option<String>)> = conn
@@ -782,7 +751,6 @@ pub fn unpin(conn: &Connection, ids: &[i64]) -> Result<()> {
         conn.execute("DELETE FROM remote_pins WHERE source_id = ?1 AND album_id = ?2", params![source, album])?;
         let state: String = conn.query_row("SELECT state FROM remote_tracks WHERE track_id = ?1", [id], |r| r.get(0))?;
         if state == "local-only" {
-            // The server doesn't have it any more: dropping the copy drops the song.
             conn.execute("DELETE FROM tracks WHERE id = ?1", [id])?;
         } else {
             conn.execute("UPDATE remote_tracks SET state = 'remote', file = NULL WHERE track_id = ?1", [id])?;
@@ -794,7 +762,6 @@ pub fn unpin(conn: &Connection, ids: &[i64]) -> Result<()> {
     Ok(())
 }
 
-/// Download one waiting offline copy. `Ok(None)` when nothing is waiting.
 pub fn download_next(conn: &Connection) -> Result<Option<i64>> {
     let next: Option<(i64, i64, String, String)> = conn
         .query_row(
@@ -831,9 +798,6 @@ fn ext_or(suffix: &str) -> &str {
     if suffix.is_empty() { "bin" } else { suffix }
 }
 
-// ---------- playing ----------
-
-/// The "stream at lower quality" setting: `None` for the original files.
 fn transcode(conn: &Connection) -> Option<(String, u32)> {
     let v: String = conn.query_row("SELECT value FROM settings WHERE key = 'serverStream'", [], |r| r.get(0)).optional().ok()??;
     let (fmt, kbps) = v.split_once('-')?;
@@ -900,8 +864,6 @@ fn open_audio(path: &str) -> Result<(Box<dyn symphonia::core::io::MediaSource>, 
     })
 }
 
-/// Start downloading the songs that play next, so they're ready in time for
-/// a gapless change.
 pub fn prefetch<'a>(paths: impl IntoIterator<Item = &'a str>) {
     let paths: Vec<String> = paths.into_iter().filter(|p| is_remote(p)).take(2).map(String::from).collect();
     if paths.is_empty() {
@@ -923,8 +885,6 @@ pub fn prefetch<'a>(paths: impl IntoIterator<Item = &'a str>) {
     });
 }
 
-/// Cover art for a server song, from the cover cache or the server, falling
-/// back to the offline copy's own art.
 pub fn cover(conn: &Connection, track_id: i64) -> Option<(Vec<u8>, String)> {
     let (source, cover_id, file): (i64, Option<String>, Option<String>) = conn
         .query_row("SELECT source_id, cover_id, file FROM remote_tracks WHERE track_id = ?1", [track_id], |r| {
@@ -958,7 +918,6 @@ pub fn cover(conn: &Connection, track_id: i64) -> Option<(Vec<u8>, String)> {
     }
 }
 
-/// Where the cover of a server song is cached, fetching it if needed.
 pub fn cover_file(track_id: i64) -> Option<PathBuf> {
     let conn = db::open(&ctx().ok()?.db_path).ok()?;
     let (data, _) = cover(&conn, track_id)?;
@@ -977,8 +936,6 @@ fn sniff(data: &[u8]) -> String {
     .into()
 }
 
-/// Where a song's audio is on this computer, if anywhere: the file itself,
-/// or a server song's offline copy.
 pub fn local_file(conn: &Connection, track: &Track) -> Option<PathBuf> {
     if !is_remote(&track.path) {
         return Some(PathBuf::from(&track.path));
@@ -1282,7 +1239,6 @@ mod tests {
         assert!(db::all_tracks(&conn).unwrap().is_empty());
     }
 
-    /// How long a big library takes: `HONEYCOMB_NAVIDROME=… cargo test --release --lib live_sync_timing -- --ignored --nocapture`
     #[test]
     #[ignore]
     fn live_sync_timing() {

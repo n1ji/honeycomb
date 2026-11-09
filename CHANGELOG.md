@@ -6,6 +6,12 @@ and uses it as the GitHub release notes.
 
 ## Unreleased
 
+- Honeycomb can play from your Navidrome now (or any other Subsonic / OpenSubsonic server)! Settings → Library → **Add a server…**, type in the address and your login, and its whole library shows up next to your own music: browse it, search it, put it in playlists and smart playlists like any other song. The music streams from the server and starts playing right away, and albums stay gapless even while streaming. Your plays, hearts, ratings and playlists go back to the server, so they're the same everywhere you listen. If you're offline for a bit, they wait and get sent once the server's back.
+- Right-click an album → **Keep album offline** and it downloads to your computer, so it plays without the server too (a little ● next to the title means it's here). Songs added to that album on the server later come along on their own. Offline songs sync to devices like your own files do.
+- There's a **Stream from servers** setting for when you're away from home: original files (best, and gapless) or Opus / MP3 at lower bitrates to save data. Offline copies are always the original files.
+- **Disconnect** on a server's row takes its songs out of your library again. The music on the server isn't touched, and anything you kept offline can stay on your computer as normal files in Music/Honeycomb, ratings and play counts included.
+- Tag editing and Show in folder are off for server songs, since the files live on the server. And ratings on them are whole stars, because that's all Subsonic servers keep.
+
 ## 0.2.0, 2026-11-03
 
 - Sync can convert now! In ⇅ Sync, pick what lossless files (FLAC, ALAC, WAV, AIFF) should become on the device: MP3, AAC, Ogg Vorbis, or 16-bit FLAC for players that should stay lossless but are short on space. MP3s, AACs and Oggs you already have just get copied, since converting them again would only make them worse. Tags and cover art come along, albums stay gapless, and the encoders are built in, so there's nothing extra to install. AAC uses Apple's own encoder, so for now it's Mac-only. The first sync takes a while, but later ones only convert what's new or changed, and switching to another format swaps the files out instead of leaving two of each.
