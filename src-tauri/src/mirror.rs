@@ -106,6 +106,10 @@ pub fn wait_for_work(timeout: Duration) {
     *w = false;
 }
 
+fn cert_key(id: i64) -> String {
+    format!("secret.server.{id}.certificate")
+}
+
 fn secret_key(id: i64) -> String {
     format!("secret.server.{id}.password")
 }
@@ -119,7 +123,13 @@ pub fn client(conn: &Connection, id: i64) -> Result<Client> {
         .optional()?
         .ok_or_else(|| anyhow!("no such server"))?;
     let secret = secrets::get(conn, &secret_key(id)).ok_or_else(|| anyhow!("The password for {url} isn't in the keychain any more"))?;
-    let c = Client::new(&url, &user, if auth == "apikey" { Auth::ApiKey(secret) } else { Auth::Password(secret) });
+    let mut c = Client::new(&url, &user, if auth == "apikey" { Auth::ApiKey(secret) } else { Auth::Password(secret) });
+    if let Some(x) = CTX.get() {
+        if let Ok(p12) = fs::read(x.data_dir.join("certs").join(format!("{id}.p12"))) {
+            let pw = secrets::get(conn, &cert_key(id)).unwrap_or_default();
+            c = c.with_identity(&p12, &pw)?;
+        }
+    }
     if let Some(x) = CTX.get() {
         x.clients.lock().unwrap_or_else(|e| e.into_inner()).insert(id, c.clone());
     }
@@ -175,12 +185,24 @@ pub fn sources(conn: &Connection) -> Result<Vec<SourceRow>> {
 }
 
 pub fn add_source(conn: &Connection, url: &str, username: &str, password: &str) -> Result<i64> {
-    let probe = Client::new(url, username, Auth::Password(password.into()));
+    add_source_with(conn, url, username, password, None)
+}
+
+/// `cert` is a client certificate: the .p12 file's bytes and its password.
+pub fn add_source_with(conn: &Connection, url: &str, username: &str, password: &str, cert: Option<(&[u8], &str)>) -> Result<i64> {
+    let make = |auth: Auth| -> Result<Client> {
+        let c = Client::new(url, username, auth);
+        match cert {
+            Some((p12, pw)) => c.with_identity(p12, pw),
+            None => Ok(c),
+        }
+    };
+    let probe = make(Auth::Password(password.into()))?;
     let first = probe.ping();
     let (client, info) = match first {
         Ok(info) if !username.is_empty() => (probe, info),
         _ => {
-            let keyed = Client::new(url, username, Auth::ApiKey(password.into()));
+            let keyed = make(Auth::ApiKey(password.into()))?;
             match keyed.ping() {
                 Ok(info) if info.extensions.iter().any(|e| e == "apiKeyAuthentication") => (keyed, info),
                 _ => (probe, first?),
@@ -204,8 +226,19 @@ pub fn add_source(conn: &Connection, url: &str, username: &str, password: &str) 
         params![name, client.base, username, auth, info.kind, info.version, info.extensions.join(",")],
     )?;
     let id = conn.last_insert_rowid();
-    if let Err(e) = secrets::set(conn, &secret_key(id), password) {
+    let saved = (|| -> Result<()> {
+        secrets::set(conn, &secret_key(id), password).map_err(|e| anyhow!(e))?;
+        if let Some((p12, pw)) = cert {
+            let dir = ctx()?.data_dir.join("certs");
+            fs::create_dir_all(&dir)?;
+            fs::write(dir.join(format!("{id}.p12")), p12)?;
+            secrets::set(conn, &cert_key(id), pw).map_err(|e| anyhow!(e))?;
+        }
+        Ok(())
+    })();
+    if let Err(e) = saved {
         conn.execute("DELETE FROM sources WHERE id = ?1", [id])?;
+        let _ = secrets::delete(conn, &secret_key(id));
         bail!(e);
     }
     Ok(id)
@@ -269,7 +302,11 @@ pub fn remove_source(conn: &mut Connection, id: i64, keep: Option<&Path>) -> Res
     tx.execute("DELETE FROM sources WHERE id = ?1", [id])?;
     tx.commit()?;
     let _ = secrets::delete(conn, &secret_key(id));
+    let _ = secrets::delete(conn, &cert_key(id));
     forget_client(id);
+    if let Some(x) = CTX.get() {
+        let _ = fs::remove_file(x.data_dir.join("certs").join(format!("{id}.p12")));
+    }
     if let Ok(c) = ctx() {
         let _ = fs::remove_dir_all(c.data_dir.join("offline").join(id.to_string()));
     }

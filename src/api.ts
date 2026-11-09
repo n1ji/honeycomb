@@ -302,7 +302,8 @@ export const api = {
   updateInstall: () => invoke<void>("update_install"),
 
   servers: () => invoke<Server[]>("servers"),
-  serverAdd: (url: string, username: string, password: string) => invoke<number>("server_add", { url, username, password }),
+  serverAdd: (url: string, username: string, password: string, certPath?: string, certPassword?: string) =>
+    invoke<number>("server_add", { url, username, password, certPath: certPath || null, certPassword: certPassword || null }),
   serverSync: (id: number) => invoke<void>("server_sync", { id }),
   serverRemove: (id: number, keep: boolean) => invoke<{ kept: number; deleted: number; folder: string | null }>("server_remove", { id, keep }),
   remoteStates: () => invoke<{ ids: number[]; states: RemoteState[] }>("remote_states"),

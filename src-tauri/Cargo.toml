@@ -41,6 +41,9 @@ unicode-normalization = "0.1"
 # System media keys and now-playing info (macOS Now Playing, MPRIS on Linux, SMTC on Windows).
 # LRCLIB lyrics lookups.
 ureq = { version = "2", features = ["json"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "0.26"
+p12-keystore = "0.2"
 # Last.fm request signatures are MD5 hashes.
 # Subsonic servers sign logins with MD5 too.
 md-5 = "0.10"

@@ -31,11 +31,16 @@ pub fn servers(state: State<AppState>) -> CmdResult<Vec<SourceRow>> {
 
 /// Check and save a server, then mirror it in the background.
 #[tauri::command]
-pub async fn server_add(app: AppHandle, url: String, username: String, password: String) -> CmdResult<i64> {
+pub async fn server_add(app: AppHandle, url: String, username: String, password: String, cert_path: Option<String>, cert_password: Option<String>) -> CmdResult<i64> {
     let app2 = app.clone();
     let id = tauri::async_runtime::spawn_blocking(move || {
         let conn = db::open(&app2.state::<AppState>().db_path).map_err(err)?;
-        mirror::add_source(&conn, &url, username.trim(), &password).map_err(|e| format!("{e:#}"))
+        let p12 = match cert_path.filter(|p| !p.is_empty()) {
+            Some(p) => Some(std::fs::read(&p).map_err(|e| format!("Couldn't read the certificate: {e}"))?),
+            None => None,
+        };
+        let cert = p12.as_deref().map(|b| (b, cert_password.as_deref().unwrap_or("")));
+        mirror::add_source_with(&conn, &url, username.trim(), &password, cert).map_err(|e| format!("{e:#}"))
     })
     .await
     .map_err(err)??;

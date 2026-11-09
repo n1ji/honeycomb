@@ -93,6 +93,18 @@ impl Client {
         Client { base: normalize_url(base), user: user.to_string(), auth, agent }
     }
 
+    /// Present a client certificate from a .p12 file on every request, for
+    /// servers behind a proxy that checks one (Cloudflare Access with mTLS and the like).
+    pub fn with_identity(mut self, p12: &[u8], password: &str) -> Result<Client> {
+        let config = tls_config(p12, password)?;
+        self.agent = ureq::AgentBuilder::new()
+            .timeout_connect(Duration::from_secs(10))
+            .timeout_read(Duration::from_secs(60))
+            .tls_config(config)
+            .build();
+        Ok(self)
+    }
+
     pub fn request(&self, endpoint: &str) -> ureq::Request {
         let r = self
             .agent
@@ -118,6 +130,9 @@ impl Client {
             Ok(resp) => resp,
             Err(e) => bail!(describe(&e)),
         };
+        if resp.get_url().contains("cloudflareaccess.com") || resp.content_type().starts_with("text/html") {
+            bail!("The server answered with a sign-in page instead of music. If it's behind Cloudflare Access or another login, add its client certificate (.p12).");
+        }
         let body: Value = crate::net::read_json(resp, MAX_ANSWER).with_context(|| format!("{endpoint}: not a Subsonic answer"))?;
         let inner = body.get("subsonic-response").cloned().ok_or_else(|| anyhow!("{endpoint}: not a Subsonic answer"))?;
         if inner.get("status").and_then(Value::as_str) != Some("ok") {
@@ -253,6 +268,21 @@ impl Client {
     pub fn cover(&self, id: &str, size: u32) -> ureq::Request {
         self.request("getCoverArt").query("id", id).query("size", &size.to_string())
     }
+}
+
+fn tls_config(p12: &[u8], password: &str) -> Result<std::sync::Arc<rustls::ClientConfig>> {
+    use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+    let store = p12_keystore::KeyStore::from_pkcs12(p12, password).map_err(|_| anyhow!("Couldn't open the certificate: wrong password, or not a .p12 file"))?;
+    let (_, chain) = store.private_key_chain().ok_or_else(|| anyhow!("The .p12 file has no private key in it"))?;
+    let certs: Vec<CertificateDer<'static>> = chain.chain().iter().map(|c| CertificateDer::from(c.as_der().to_vec())).collect();
+    let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(chain.key().to_vec()));
+    let roots = rustls::RootCertStore { roots: webpki_roots::TLS_SERVER_ROOTS.to_vec() };
+    let config = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(rustls::crypto::ring::default_provider()))
+        .with_safe_default_protocol_versions()?
+        .with_root_certificates(roots)
+        .with_client_auth_cert(certs, key)
+        .context("The certificate in the .p12 file can't be used")?;
+    Ok(std::sync::Arc::new(config))
 }
 
 /// A request error for people to read. ureq's own messages include the URL,
@@ -441,6 +471,26 @@ pub(crate) mod tests {
         assert_eq!(info.kind, "fake");
         assert_eq!(info.version, "0.64.2");
         assert_eq!(info.extensions, ["songLyrics", "apiKeyAuthentication"]);
+    }
+
+    #[test]
+    fn client_certificates_load_from_p12() {
+        let dir = std::env::temp_dir().join(format!("hc-p12-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sh = format!(
+            "cd '{}' && openssl req -x509 -newkey rsa:2048 -nodes -keyout k.pem -out c.pem -days 1 -subj /CN=test 2>/dev/null && openssl pkcs12 -export -inkey k.pem -in c.pem -out t.p12 -passout pass:pw 2>/dev/null",
+            dir.display()
+        );
+        if !std::process::Command::new("sh").args(["-c", &sh]).status().map(|s| s.success()).unwrap_or(false) {
+            eprintln!("no openssl here, skipping");
+            return;
+        }
+        let p12 = std::fs::read(dir.join("t.p12")).unwrap();
+        let c = Client::new("127.0.0.1:1", "u", Auth::Password("p".into()));
+        assert!(c.clone().with_identity(&p12, "pw").is_ok());
+        let e = c.with_identity(&p12, "wrong").unwrap_err().to_string();
+        assert!(e.contains("wrong password"), "{e}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

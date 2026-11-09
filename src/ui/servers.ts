@@ -1,6 +1,6 @@
 // Servers (Navidrome and other OpenSubsonic servers) in Settings → Library:
 // their rows next to the folders, adding one, and how they stream.
-import { ask } from "@tauri-apps/plugin-dialog";
+import { ask, open } from "@tauri-apps/plugin-dialog";
 import { api, Server } from "../api";
 import { store } from "../store";
 import { fmtDate, h, toast } from "../util";
@@ -81,6 +81,20 @@ export function openAddServer(onAdded: () => void) {
   const url = h("input", { class: "input", type: "text", placeholder: "music.example.com or 192.168.1.10:4533" });
   const user = h("input", { class: "input", type: "text", autocomplete: "username" });
   const pass = h("input", { class: "input", type: "password", autocomplete: "current-password" });
+  let certPath = "";
+  const certPass = h("input", { class: "input", type: "password", autocomplete: "off", placeholder: "Certificate password" });
+  const certName = h("span", { class: "muted" }, "None");
+  const certField = h("label", { class: "field" }, h("span", {}, "Client certificate (only if your server asks for one)"), h("div", { class: "row" }, button("Choose .p12…", () =>
+    run(async () => {
+      const f = await open({ multiple: false, title: "Choose a client certificate", filters: [{ name: "Certificate", extensions: ["p12", "pfx"] }] });
+      if (typeof f !== "string") return;
+      certPath = f;
+      certName.textContent = f.split(/[\\/]/).pop() || f;
+      certPass.hidden = false;
+      certPass.focus();
+    }),
+  ), certName), certPass);
+  certPass.hidden = true;
   const status = h("p", { class: "muted" }, "Navidrome and other Subsonic or OpenSubsonic servers. Honeycomb mirrors the song list, streams the music and keeps nothing else unless you make it available offline. The password goes in the system keychain.");
   const add = button(
     "Add",
@@ -91,7 +105,7 @@ export function openAddServer(onAdded: () => void) {
         status.textContent = "Connecting…";
         status.classList.remove("server-error");
         try {
-          await api.serverAdd(url.value.trim(), user.value.trim(), pass.value);
+          await api.serverAdd(url.value.trim(), user.value.trim(), pass.value, certPath, certPass.value);
           m.close();
           toast("Server added. Syncing its library…");
           onAdded();
@@ -104,7 +118,7 @@ export function openAddServer(onAdded: () => void) {
     true,
   );
   pass.addEventListener("keydown", (e) => e.key === "Enter" && add.click());
-  m.body.append(field("Address", url), field("Username", user), field("Password", pass), status);
+  m.body.append(field("Address", url), field("Username", user), field("Password", pass), certField, status);
   m.footer.append(button("Cancel", () => m.close()), add);
   url.focus();
 }
