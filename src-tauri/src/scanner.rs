@@ -204,12 +204,12 @@ pub(crate) fn scan(db_path: &Path, progress: &dyn Fn(Progress)) -> Result<Finish
             "UPDATE tracks SET path = ?2, title = ?3, artist = ?4, album_artist = ?5, album = ?6,
                 genre = ?7, composer = ?8, comment = ?9, year = ?10, track_no = ?11, disc_no = ?12,
                 duration = ?13, bitrate = ?14, sample_rate = ?15, format = ?16, mtime = ?17, has_art = ?18,
-                bit_depth = ?19
+                bit_depth = ?19, rg_track_gain = ?20, rg_track_peak = ?21, rg_album_gain = ?22, rg_album_peak = ?23
              WHERE id = ?1",
             rusqlite::params![
                 old, t.path, t.title, t.artist, t.album_artist, t.album, t.genre, t.composer, t.comment,
                 t.year, t.track_no, t.disc_no, t.duration, t.bitrate, t.sample_rate, t.format, t.mtime,
-                t.has_art, t.bit_depth
+                t.has_art, t.bit_depth, t.rg.track_gain, t.rg.track_peak, t.rg.album_gain, t.rg.album_peak
             ],
         )?;
         if *new_inboxed {

@@ -27,7 +27,7 @@ use tauri::http::{Response, StatusCode, header};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use models::{Playlist, SmartRules, TagEdit, Track, TrackTable, now_secs};
-use player::{Cmd, PlayerHandle, QItem, Repeat};
+use player::{Cmd, PlayerHandle, QItem, Repeat, RgMode};
 
 pub struct AppState {
     db: Mutex<Connection>,
@@ -55,7 +55,7 @@ impl AppState {
         Ok(db::tracks_by_ids(&conn, ids)
             .map_err(err)?
             .into_iter()
-            .map(|t| QItem { uid: 0, track_id: t.id, path: t.path, duration: t.duration })
+            .map(|t| QItem { uid: 0, track_id: t.id, path: t.path, duration: t.duration, rg: t.rg })
             .collect())
     }
 }
@@ -643,6 +643,11 @@ fn player_cmd(state: State<AppState>, cmd: String, value: Option<f64>) -> CmdRes
             let _ = db::set_setting(&state.conn(), "volume", &v.to_string());
             Cmd::Volume(v as f32)
         }
+        "replayGain" => {
+            let mode = ["off", "track", "album"].get(v as usize).copied().unwrap_or("off");
+            let _ = db::set_setting(&state.conn(), "replayGain", mode);
+            Cmd::ReplayGain(RgMode::parse(mode))
+        }
         "shuffle" => Cmd::Shuffle(v != 0.0),
         "repeatOff" => Cmd::Repeat(Repeat::Off),
         "repeatAll" => Cmd::Repeat(Repeat::All),
@@ -753,12 +758,11 @@ pub fn run() {
             let test_library = std::env::var_os("HONEYCOMB_DATA_DIR").is_some() || smoke::folder().is_some();
             secrets::init(&app.config().identifier, test_library.then_some(dir.as_path()));
             secrets::migrate(&conn);
-            let volume = db::settings(&conn)?
-                .into_iter()
-                .find(|(k, _)| k == "volume")
-                .and_then(|(_, v)| v.parse().ok())
-                .unwrap_or(0.8);
-            let player = player::spawn(app.handle().clone(), db_path.clone(), volume);
+            let settings = db::settings(&conn)?;
+            let setting = |key: &str| settings.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str());
+            let volume = setting("volume").and_then(|v| v.parse().ok()).unwrap_or(0.8);
+            let rg_mode = RgMode::parse(setting("replayGain").unwrap_or("off"));
+            let player = player::spawn(app.handle().clone(), db_path.clone(), volume, rg_mode);
             media::init(app.handle(), player.clone());
             app.manage(AppState {
                 db: Mutex::new(conn),

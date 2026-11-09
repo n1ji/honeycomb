@@ -3,11 +3,12 @@ use std::path::Path;
 use anyhow::Result;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
-use crate::models::{Playlist, SmartRules, Track};
+use crate::models::{Playlist, ReplayGain, SmartRules, Track};
 
 pub const TRACK_COLS: &str = "id, path, title, artist, album_artist, album, genre, composer, comment, \
      year, track_no, disc_no, duration, bitrate, sample_rate, format, rating, play_count, \
-     last_played, date_added, mtime, has_art, loved, inbox, bit_depth";
+     last_played, date_added, mtime, has_art, loved, inbox, bit_depth, \
+     rg_track_gain, rg_track_peak, rg_album_gain, rg_album_peak";
 
 pub fn open(path: &Path) -> Result<Connection> {
     let conn = Connection::open(path)?;
@@ -124,6 +125,19 @@ pub fn migrate(conn: &Connection) -> Result<()> {
              COMMIT;",
         )?;
     }
+    if version < 6 {
+        // v6: ReplayGain. Every file is read again once to fill it in.
+        conn.execute_batch(
+            "BEGIN;
+             ALTER TABLE tracks ADD COLUMN rg_track_gain REAL;
+             ALTER TABLE tracks ADD COLUMN rg_track_peak REAL;
+             ALTER TABLE tracks ADD COLUMN rg_album_gain REAL;
+             ALTER TABLE tracks ADD COLUMN rg_album_peak REAL;
+             UPDATE tracks SET mtime = 0;
+             PRAGMA user_version = 6;
+             COMMIT;",
+        )?;
+    }
     Ok(())
 }
 
@@ -154,6 +168,12 @@ pub fn row_to_track(row: &Row) -> rusqlite::Result<Track> {
         loved: row.get(22)?,
         inbox: row.get(23)?,
         bit_depth: row.get(24)?,
+        rg: ReplayGain {
+            track_gain: row.get(25)?,
+            track_peak: row.get(26)?,
+            album_gain: row.get(27)?,
+            album_peak: row.get(28)?,
+        },
     })
 }
 
@@ -194,19 +214,24 @@ pub fn track_id_by_path(conn: &Connection, path: &str) -> Result<Option<i64>> {
 pub fn upsert_track(conn: &Connection, t: &Track) -> Result<i64> {
     conn.execute(
         "INSERT INTO tracks (path, title, artist, album_artist, album, genre, composer, comment,
-            year, track_no, disc_no, duration, bitrate, sample_rate, format, date_added, mtime, has_art, bit_depth)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
+            year, track_no, disc_no, duration, bitrate, sample_rate, format, date_added, mtime, has_art, bit_depth,
+            rg_track_gain, rg_track_peak, rg_album_gain, rg_album_peak)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19,
+            ?20, ?21, ?22, ?23)
          ON CONFLICT(path) DO UPDATE SET
             title = excluded.title, artist = excluded.artist, album_artist = excluded.album_artist,
             album = excluded.album, genre = excluded.genre, composer = excluded.composer,
             comment = excluded.comment, year = excluded.year, track_no = excluded.track_no,
             disc_no = excluded.disc_no, duration = excluded.duration, bitrate = excluded.bitrate,
             sample_rate = excluded.sample_rate, format = excluded.format, mtime = excluded.mtime,
-            has_art = excluded.has_art, bit_depth = excluded.bit_depth",
+            has_art = excluded.has_art, bit_depth = excluded.bit_depth,
+            rg_track_gain = excluded.rg_track_gain, rg_track_peak = excluded.rg_track_peak,
+            rg_album_gain = excluded.rg_album_gain, rg_album_peak = excluded.rg_album_peak",
         params![
             t.path, t.title, t.artist, t.album_artist, t.album, t.genre, t.composer, t.comment,
             t.year, t.track_no, t.disc_no, t.duration, t.bitrate, t.sample_rate, t.format,
-            t.date_added, t.mtime, t.has_art, t.bit_depth
+            t.date_added, t.mtime, t.has_art, t.bit_depth,
+            t.rg.track_gain, t.rg.track_peak, t.rg.album_gain, t.rg.album_peak
         ],
     )?;
     Ok(track_id_by_path(conn, &t.path)?.unwrap_or_default())
@@ -440,7 +465,7 @@ mod tests {
         let t = &all_tracks(&conn).unwrap()[0];
         assert!(!t.loved && !t.inbox);
         let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-        assert_eq!(v, 5);
+        assert_eq!(v, 6);
     }
 
     #[test]
@@ -449,6 +474,10 @@ mod tests {
         migrate(&conn).unwrap();
         conn.execute_batch(
             "ALTER TABLE tracks DROP COLUMN bit_depth;
+             ALTER TABLE tracks DROP COLUMN rg_track_gain;
+             ALTER TABLE tracks DROP COLUMN rg_track_peak;
+             ALTER TABLE tracks DROP COLUMN rg_album_gain;
+             ALTER TABLE tracks DROP COLUMN rg_album_peak;
              PRAGMA user_version = 4;
              INSERT INTO tracks (path, format, mtime, date_added) VALUES ('a', 'FLAC', 5, 0), ('b', 'MP3', 5, 0);",
         )
@@ -461,8 +490,28 @@ mod tests {
             .unwrap()
             .collect::<rusqlite::Result<_>>()
             .unwrap();
-        assert_eq!(mtimes, [0, 5]);
+        // v5 rereads the FLAC, and v6 (ReplayGain) every file.
+        assert_eq!(mtimes, [0, 0]);
         assert_eq!(all_tracks(&conn).unwrap()[0].bit_depth, None);
+    }
+
+    #[test]
+    fn v6_migration_rereads_every_file() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        conn.execute_batch(
+            "ALTER TABLE tracks DROP COLUMN rg_track_gain;
+             ALTER TABLE tracks DROP COLUMN rg_track_peak;
+             ALTER TABLE tracks DROP COLUMN rg_album_gain;
+             ALTER TABLE tracks DROP COLUMN rg_album_peak;
+             PRAGMA user_version = 5;
+             INSERT INTO tracks (path, format, mtime, date_added) VALUES ('a', 'MP3', 5, 0);",
+        )
+        .unwrap();
+        migrate(&conn).unwrap();
+        let t = &all_tracks(&conn).unwrap()[0];
+        assert_eq!(t.mtime, 0);
+        assert_eq!(t.rg, ReplayGain::default());
     }
 }
 

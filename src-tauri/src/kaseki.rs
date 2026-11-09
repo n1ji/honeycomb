@@ -110,13 +110,20 @@ pub struct Marker {
 
 pub type Markers = Arc<Mutex<Vec<Marker>>>;
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlanItem {
+    pub uid: u64,
+    pub path: String,
+    pub gain: f32,
+}
+
 pub enum DecMsg {
     /// The output (re)opened, with a fresh buffer.
     Output { prod: Producer<f32>, shared: Arc<Shared>, rate: u32, channels: usize },
-    /// Drop what's buffered and play `source` from `pos`.
-    Start { epoch: u64, uid: u64, source: Box<Source>, pos: f64 },
+    /// Drop what's buffered and play `source` from `pos`, scaled by `gain` (ReplayGain).
+    Start { epoch: u64, uid: u64, source: Box<Source>, pos: f64, gain: f32 },
     /// Tracks to play after segment `base`, in order: `items[k]` is segment `base + 1 + k`.
-    Plan { epoch: u64, base: u32, items: Vec<(u64, String)> },
+    Plan { epoch: u64, base: u32, items: Vec<PlanItem> },
     /// Drop what's buffered and stay quiet.
     Stop,
     /// The output closed.
@@ -875,6 +882,7 @@ struct Out {
 struct Playing {
     source: Box<Source>,
     seq: u32,
+    gain: f32,
 }
 
 /// The decoder thread's state.
@@ -884,7 +892,7 @@ pub struct Dec {
     epoch: u64,
     cur: Option<Playing>,
     chain: Option<Chain>,
-    plan: (u32, Vec<(u64, String)>),
+    plan: (u32, Vec<PlanItem>),
     /// Output samples not yet in the buffer.
     pending: Vec<f32>,
     pending_off: usize,
@@ -981,7 +989,7 @@ impl Dec {
                 self.out = Some(Out { prod, shared, rate, channels, written: 0 });
                 self.reset();
             }
-            DecMsg::Start { epoch, uid, mut source, pos } => {
+            DecMsg::Start { epoch, uid, mut source, pos, gain } => {
                 self.flush();
                 self.epoch = epoch;
                 self.plan = (0, Vec::new());
@@ -990,7 +998,7 @@ impl Dec {
                 self.mark(Marker { epoch, seq: 0, uid: Some(uid), at, start: start.unwrap_or(pos) });
                 match start {
                     Some(_) => {
-                        self.cur = Some(Playing { source, seq: 0 });
+                        self.cur = Some(Playing { source, seq: 0, gain });
                         self.filling = true;
                     }
                     // Past the end: the track is over.
@@ -1074,10 +1082,15 @@ impl Dec {
             return;
         }
         let Some(cur) = &mut self.cur else { return };
-        let Some((data, ch, rate)) = cur.source.decode_next() else {
+        let Some((mut data, ch, rate)) = cur.source.decode_next() else {
             self.track_ended();
             return;
         };
+        // Per track, before the resampler: a gapless join switches gain on
+        // exactly the first sample of the next track.
+        if cur.gain != 1.0 {
+            data.iter_mut().for_each(|s| *s *= cur.gain);
+        }
         let layout = cur.source.layout;
         let (out_rate, out_ch) = match &self.out {
             Some(o) => (o.rate, o.channels),
@@ -1108,14 +1121,14 @@ impl Dec {
             .checked_sub(*base)
             .and_then(|k| items.get(k as usize))
             .cloned();
-        if let (Some((uid, path)), Some(chain)) = (next, &self.chain) {
+        if let (Some(PlanItem { uid, path, gain }), Some(chain)) = (next, &self.chain) {
             match catch_unwind(AssertUnwindSafe(|| Source::open(&path))) {
                 // Same rate: gapless. Another rate ends here so the player can
                 // reopen the output at the new rate instead of resampling.
                 Ok(Ok(source)) if source.rate == chain.in_rate => {
                     let seq = done.seq + 1;
                     let at = chain.at();
-                    self.cur = Some(Playing { source: Box::new(source), seq });
+                    self.cur = Some(Playing { source: Box::new(source), seq, gain });
                     self.mark(Marker { epoch: self.epoch, seq, uid: Some(uid), at, start: 0.0 });
                     return;
                 }
@@ -1209,7 +1222,7 @@ pub(crate) mod tests {
 
         fn start(&mut self, epoch: u64, uid: u64, path: &Path, pos: f64) {
             let source = Box::new(Source::open(path.to_str().unwrap()).unwrap());
-            self.dec.handle(DecMsg::Start { epoch, uid, source, pos });
+            self.dec.handle(DecMsg::Start { epoch, uid, source, pos, gain: 1.0 });
         }
 
         /// Read like the callback does, honouring flushes.
@@ -1298,7 +1311,7 @@ pub(crate) mod tests {
         write_wav(&b, 44100, 7000, |i| ramp(i + 10000));
         let mut rig = Rig::new(44100, 4096);
         rig.start(3, 1, &a, 0.0);
-        rig.dec.handle(DecMsg::Plan { epoch: 3, base: 0, items: vec![(2, b.to_string_lossy().into())] });
+        rig.dec.handle(DecMsg::Plan { epoch: 3, base: 0, items: vec![PlanItem { uid: 2, path: b.to_string_lossy().into(), gain: 1.0 }] });
         rig.run_to_end(3);
         assert_eq!(rig.got.len(), 17000 * 2);
         for (i, f) in rig.got.chunks_exact(2).enumerate() {
@@ -1308,6 +1321,24 @@ pub(crate) mod tests {
         assert_eq!(seen, vec![(0, Some(1), 0), (1, Some(2), 20000), (2, None, 34000)]);
     }
 
+    /// ReplayGain switches on the first sample of the next track, not a
+    /// buffer later or earlier.
+    #[test]
+    fn gain_changes_exactly_at_the_gapless_join() {
+        let (a, b) = (tmp("rg-a.wav"), tmp("rg-b.wav"));
+        write_wav(&a, 44100, 10000, |_| 8000);
+        write_wav(&b, 44100, 7000, |_| 8000);
+        let mut rig = Rig::new(44100, 4096);
+        let source = Box::new(Source::open(a.to_str().unwrap()).unwrap());
+        rig.dec.handle(DecMsg::Start { epoch: 1, uid: 1, source, pos: 0.0, gain: 1.0 });
+        rig.dec.handle(DecMsg::Plan { epoch: 1, base: 0, items: vec![PlanItem { uid: 2, path: b.to_string_lossy().into(), gain: 0.5 }] });
+        rig.run_to_end(1);
+        assert_eq!(rig.got.len(), 17000 * 2);
+        for (i, f) in rig.got.chunks_exact(2).enumerate() {
+            assert_eq!(to_i16(f[0]), if i < 10000 { 8000 } else { 4000 }, "frame {i}");
+        }
+    }
+
     #[test]
     fn a_stale_plan_is_ignored() {
         let (a, b) = (tmp("stale-a.wav"), tmp("stale-b.wav"));
@@ -1315,7 +1346,7 @@ pub(crate) mod tests {
         write_wav(&b, 44100, 1000, ramp);
         let mut rig = Rig::new(44100, 4096);
         rig.start(5, 1, &a, 0.0);
-        rig.dec.handle(DecMsg::Plan { epoch: 4, base: 0, items: vec![(2, b.to_string_lossy().into())] });
+        rig.dec.handle(DecMsg::Plan { epoch: 4, base: 0, items: vec![PlanItem { uid: 2, path: b.to_string_lossy().into(), gain: 1.0 }] });
         rig.run_to_end(5);
         assert_eq!(rig.got.len(), 2000);
         assert_eq!(rig.seen.len(), 2);
@@ -1424,7 +1455,7 @@ pub(crate) mod tests {
         write_wav(&b, 44100, 20000, |_| 8000);
         let mut rig = Rig::new(48000, 8192);
         rig.start(1, 1, &a, 0.0);
-        rig.dec.handle(DecMsg::Plan { epoch: 1, base: 0, items: vec![(2, b.to_string_lossy().into())] });
+        rig.dec.handle(DecMsg::Plan { epoch: 1, base: 0, items: vec![PlanItem { uid: 2, path: b.to_string_lossy().into(), gain: 1.0 }] });
         rig.run_to_end(1);
         let expected = (50000.0f64 * 48000.0 / 44100.0).round() as usize;
         assert_eq!(rig.got.len(), expected * 2);
@@ -1444,7 +1475,7 @@ pub(crate) mod tests {
         write_wav(&b, 48000, 1000, ramp);
         let mut rig = Rig::new(44100, 4096);
         rig.start(1, 1, &a, 0.0);
-        rig.dec.handle(DecMsg::Plan { epoch: 1, base: 0, items: vec![(2, b.to_string_lossy().into())] });
+        rig.dec.handle(DecMsg::Plan { epoch: 1, base: 0, items: vec![PlanItem { uid: 2, path: b.to_string_lossy().into(), gain: 1.0 }] });
         rig.run_to_end(1);
         let seen: Vec<_> = rig.seen.iter().map(|m| m.uid).collect();
         assert_eq!(seen, vec![Some(1), None]);
@@ -1475,7 +1506,7 @@ pub(crate) mod tests {
         // All of them back to back, gaplessly where the rates match.
         let mut rig = Rig::new(44100, 44100);
         rig.start(1, 0, &files[0], 0.0);
-        let items = files[1..].iter().enumerate().map(|(i, f)| (i as u64 + 1, f.to_string_lossy().into())).collect();
+        let items = files[1..].iter().enumerate().map(|(i, f)| PlanItem { uid: i as u64 + 1, path: f.to_string_lossy().into(), gain: 1.0 }).collect();
         rig.dec.handle(DecMsg::Plan { epoch: 1, base: 0, items });
         rig.run_to_end(1);
         println!("chain: {:?}", rig.seen.iter().map(|m| (m.uid, m.at)).collect::<Vec<_>>());

@@ -162,7 +162,7 @@ fn run(app: &AppHandle, dir: &Path, r: &mut Report) {
             let _ = tx.lock().unwrap().send(t);
         }
     });
-    let item = |t: &crate::models::Track| QItem { uid: 0, track_id: t.id, path: t.path.clone(), duration: t.duration };
+    let item = |t: &crate::models::Track| QItem { uid: 0, track_id: t.id, path: t.path.clone(), duration: t.duration, rg: t.rg };
     for t in &tracks {
         while rx.try_recv().is_ok() {}
         state.player.send(Cmd::Load(vec![item(t)], 0));

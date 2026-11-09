@@ -83,6 +83,19 @@ export function stages(t: Track, sig: Signal | null, volume: number): Stage[] {
     list.push({ state: "ok", title: "Channels as they are", detail: channelName(s.channels) });
   }
 
+  if (sig?.trackId === t.id && sig.replayGain != null) {
+    const db = sig.replayGain;
+    const shown = `${db > 0 ? "+" : db < 0 ? "−" : ""}${Math.abs(db).toFixed(1)} dB`;
+    const mode = store.settings.replayGain === "album" ? "Album" : "Track";
+    list.push(
+      Math.abs(db) < 0.05
+        ? { state: "ok", title: "ReplayGain 0.0 dB", detail: `${mode} gain from the file's tags; nothing to change` }
+        : { state: "change", title: `ReplayGain ${shown}`, detail: `${mode} gain from the file's tags, so songs play at a similar loudness` },
+    );
+  } else if (sig?.trackId === t.id && sig.replayGainMissing) {
+    list.push({ state: "info", title: "No ReplayGain tags", detail: "This song plays at its own volume" });
+  }
+
   if (volume >= 1) {
     list.push({ state: "ok", title: "Volume at 100%", detail: "The samples go out as they are" });
   } else {

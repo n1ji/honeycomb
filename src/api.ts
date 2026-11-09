@@ -80,6 +80,10 @@ export interface QueueState {
 export interface Signal {
   trackId: number;
   source: { codec: string; lossless: boolean; bits: number | null; rate: number | null; channels: number | null } | null;
+  /** ReplayGain applied, in dB; null when it's off or the song has no gain tags. */
+  replayGain: number | null;
+  /** ReplayGain is on, but this song has no gain tags. */
+  replayGainMissing: boolean;
   /** Null while the output is closed. */
   output: { device: string | null; rate: number; channels: number; format: string } | null;
 }

@@ -33,6 +33,19 @@ pub struct Track {
     pub inbox: bool,
     /// Bits per sample, for lossless files.
     pub bit_depth: Option<u8>,
+    /// Only the player uses it, so it isn't sent to the UI.
+    #[serde(skip)]
+    pub rg: ReplayGain,
+}
+
+/// ReplayGain from the file's tags: gains in dB, peaks as linear amplitude.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplayGain {
+    pub track_gain: Option<f32>,
+    pub track_peak: Option<f32>,
+    pub album_gain: Option<f32>,
+    pub album_peak: Option<f32>,
 }
 
 /// The whole library for the UI in a compact form: the field names once, then
@@ -214,6 +227,7 @@ mod tests {
             loved: true,
             inbox: false,
             bit_depth: Some(24),
+            rg: ReplayGain::default(),
         };
         let obj = serde_json::to_value(&t).unwrap();
         let table = serde_json::to_value(TrackTable(vec![t])).unwrap();

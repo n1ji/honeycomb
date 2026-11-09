@@ -6,6 +6,8 @@ and uses it as the GitHub release notes.
 
 ## Unreleased
 
+- ReplayGain is here! Settings → Playback → ReplayGain levels out the volume between songs using the ReplayGain tags in your files, so a quiet old record and a loud new one stop fighting over your volume knob. **Track** plays every song at about the same loudness, **Album** keeps the quiet and loud songs of an album the way they were mixed. It switches on the exact first sample of the next song, so gapless albums stay gapless, and when the tags say how loud a song peaks, it won't turn it up so far that it clips. Your files aren't touched. The signal path (click the quality badge) shows how much it changed the current song, or says when a song has no tags. Songs without ReplayGain tags just play as they are; a ReplayGain scanner can add them. Honeycomb reads all your files once on the first scan after updating to pick up the tags.
+
 ## 0.2.0, 2026-11-03
 
 - Sync can convert now! In ⇅ Sync, pick what lossless files (FLAC, ALAC, WAV, AIFF) should become on the device: MP3, AAC, Ogg Vorbis, or 16-bit FLAC for players that should stay lossless but are short on space. MP3s, AACs and Oggs you already have just get copied, since converting them again would only make them worse. Tags and cover art come along, albums stay gapless, and the encoders are built in, so there's nothing extra to install. AAC uses Apple's own encoder, so for now it's Mac-only. The first sync takes a while, but later ones only convert what's new or changed, and switching to another format swaps the files out instead of leaving two of each.

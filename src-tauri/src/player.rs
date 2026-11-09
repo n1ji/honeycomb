@@ -18,9 +18,9 @@ use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Runtime};
 
-use crate::kaseki::{self, DecMsg, Marker, Markers, Output, Source};
+use crate::kaseki::{self, DecMsg, Marker, Markers, Output, PlanItem, Source};
 use crate::db;
-use crate::models::now_secs;
+use crate::models::{ReplayGain, now_secs};
 
 const TICK: Duration = Duration::from_millis(200);
 /// How often to check whether the system's default output device changed.
@@ -36,6 +36,46 @@ pub struct QItem {
     pub track_id: i64,
     pub path: String,
     pub duration: f64,
+    pub rg: ReplayGain,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RgMode {
+    #[default]
+    Off,
+    Track,
+    Album,
+}
+
+impl RgMode {
+    pub fn parse(s: &str) -> RgMode {
+        match s {
+            "track" => RgMode::Track,
+            "album" => RgMode::Album,
+            _ => RgMode::Off,
+        }
+    }
+}
+
+/// The gain to apply in dB, or None when ReplayGain is off or the file has no
+/// gain tags. Album mode falls back to the track gain and vice versa. A known
+/// peak caps the gain so the loudest sample stays at or under full scale.
+pub fn replay_gain(rg: &ReplayGain, mode: RgMode) -> Option<f32> {
+    let track = rg.track_gain.map(|g| (g, rg.track_peak));
+    let album = rg.album_gain.map(|g| (g, rg.album_peak));
+    let (gain, peak) = match mode {
+        RgMode::Off => return None,
+        RgMode::Track => track.or(album)?,
+        RgMode::Album => album.or(track)?,
+    };
+    Some(match peak {
+        Some(p) if p > 0.0 => gain.min(-20.0 * p.log10()),
+        _ => gain,
+    })
+}
+
+fn linear(db: Option<f32>) -> f32 {
+    db.map_or(1.0, |g| 10f32.powf(g / 20.0))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -59,6 +99,7 @@ pub enum Cmd {
     /// Seek relative to the current position, in seconds.
     SeekBy(f64),
     Volume(f32),
+    ReplayGain(RgMode),
     Shuffle(bool),
     Repeat(Repeat),
     /// Add items at the end, or right after the current track when `next` is true.
@@ -98,6 +139,10 @@ struct Tick {
 struct Signal {
     track_id: i64,
     source: Option<kaseki::SourceInfo>,
+    /// ReplayGain applied to this song, in dB.
+    replay_gain: Option<f32>,
+    /// ReplayGain is on but the song has no gain tags.
+    replay_gain_missing: bool,
     /// The output this song plays through. While the output is closed (paused
     /// for a while) it stays what it was for the same song; `None` until the
     /// song has played, or with no device.
@@ -153,11 +198,11 @@ struct Played {
     last_played: i64,
 }
 
-pub fn spawn<R: Runtime>(app: AppHandle<R>, db_path: PathBuf, volume: f32) -> PlayerHandle {
+pub fn spawn<R: Runtime>(app: AppHandle<R>, db_path: PathBuf, volume: f32, rg_mode: RgMode) -> PlayerHandle {
     let (tx, rx) = channel();
     std::thread::Builder::new()
         .name("audio".into())
-        .spawn(move || Engine::new(app, db_path, volume).run(rx))
+        .spawn(move || Engine::new(app, db_path, volume, rg_mode).run(rx))
         .expect("spawn audio thread");
     PlayerHandle { tx }
 }
@@ -189,6 +234,7 @@ struct Engine<R: Runtime> {
     current: Option<usize>,
     repeat: Repeat,
     volume: f32,
+    rg_mode: RgMode,
     next_uid: u64,
     error: Option<String>,
     /// Name of the device the output plays on.
@@ -212,7 +258,7 @@ struct Engine<R: Runtime> {
 }
 
 impl<R: Runtime> Engine<R> {
-    fn new(app: AppHandle<R>, db_path: PathBuf, volume: f32) -> Self {
+    fn new(app: AppHandle<R>, db_path: PathBuf, volume: f32, rg_mode: RgMode) -> Self {
         let markers = Markers::default();
         Engine {
             app,
@@ -233,6 +279,7 @@ impl<R: Runtime> Engine<R> {
             current: None,
             repeat: Repeat::Off,
             volume,
+            rg_mode,
             next_uid: 1,
             error: None,
             device: None,
@@ -368,6 +415,16 @@ impl<R: Runtime> Engine<R> {
                     o.shared.set_volume(self.volume);
                 }
             }
+            Cmd::ReplayGain(mode) => {
+                if mode != self.rg_mode {
+                    self.rg_mode = mode;
+                    // Already decoded audio has the old gain baked in.
+                    if let (true, None, Some(cur)) = (self.active, self.suspended, self.current) {
+                        let (pos, paused) = (self.position(), self.is_paused());
+                        self.restart_at(cur, pos, paused);
+                    }
+                }
+            }
             Cmd::Shuffle(on) => self.set_shuffle(on),
             Cmd::Repeat(r) => self.repeat = r,
             Cmd::Enqueue(items, next) => {
@@ -497,7 +554,8 @@ impl<R: Runtime> Engine<R> {
                     self.resume = None;
                     self.set_paused(paused);
                     let uid = self.queue[i].uid;
-                    let _ = self.dec.send(DecMsg::Start { epoch: self.epoch, uid, source: Box::new(source), pos });
+                    let gain = linear(replay_gain(&self.queue[i].rg, self.rg_mode));
+                    let _ = self.dec.send(DecMsg::Start { epoch: self.epoch, uid, source: Box::new(source), pos, gain });
                     self.current = Some(i);
                     self.error = None;
                     self.send_plan();
@@ -676,7 +734,13 @@ impl<R: Runtime> Engine<R> {
         if self.sent_plan.as_ref() == Some(&key) {
             return;
         }
-        let items = idxs.iter().map(|&i| (self.queue[i].uid, self.queue[i].path.clone())).collect();
+        let items = idxs
+            .iter()
+            .map(|&i| {
+                let q = &self.queue[i];
+                PlanItem { uid: q.uid, path: q.path.clone(), gain: linear(replay_gain(&q.rg, self.rg_mode)) }
+            })
+            .collect();
         let _ = self.dec.send(DecMsg::Plan { epoch: self.epoch, base, items });
         self.sent_plan = Some(key);
     }
@@ -828,9 +892,12 @@ impl<R: Runtime> Engine<R> {
             if self.probed.as_ref().map(|p| p.0) != Some(q.uid) {
                 self.probed = Some((q.uid, kaseki::probe(&q.path)));
             }
+            let replay_gain = replay_gain(&q.rg, self.rg_mode);
             Signal {
                 track_id: q.track_id,
                 source: self.probed.as_ref().and_then(|p| p.1.clone()),
+                replay_gain,
+                replay_gain_missing: self.rg_mode != RgMode::Off && replay_gain.is_none(),
                 output: self
                     .out
                     .as_ref()
@@ -1045,6 +1112,25 @@ fn file_stem(path: &str) -> String {
 /// skip through each of them.
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn replay_gain_picks_and_caps() {
+        let rg = ReplayGain { track_gain: Some(-6.0), track_peak: Some(0.5), album_gain: Some(-8.0), album_peak: None };
+        assert_eq!(replay_gain(&rg, RgMode::Off), None);
+        assert_eq!(replay_gain(&rg, RgMode::Track), Some(-6.0));
+        assert_eq!(replay_gain(&rg, RgMode::Album), Some(-8.0));
+        // Each mode falls back to the other gain.
+        let track_only = ReplayGain { track_gain: Some(-3.0), ..Default::default() };
+        assert_eq!(replay_gain(&track_only, RgMode::Album), Some(-3.0));
+        assert_eq!(replay_gain(&ReplayGain::default(), RgMode::Track), None);
+        // A quiet song turned up stops where its peak reaches full scale.
+        let quiet = ReplayGain { track_gain: Some(9.0), track_peak: Some(0.5), ..Default::default() };
+        let g = replay_gain(&quiet, RgMode::Track).unwrap();
+        assert!((g - 6.0206).abs() < 1e-3, "{g}");
+        assert!((linear(Some(g)) * 0.5 - 1.0).abs() < 1e-4);
+        assert_eq!(linear(None), 1.0);
+    }
+
     #[test]
     fn listen_threshold_follows_lastfm_rules() {
         assert_eq!(super::listen_threshold(30.0), None);
@@ -1094,7 +1180,7 @@ mod tests {
             }
             let db_path = dir.join("library.db");
             db::migrate(&db::open(&db_path).unwrap()).unwrap();
-            let player = spawn(app.handle().clone(), db_path, 0.0);
+            let player = spawn(app.handle().clone(), db_path, 0.0, RgMode::Off);
             Rig { player, log, _app: app }
         }
 
@@ -1128,7 +1214,7 @@ mod tests {
     }
 
     fn item(id: i64, path: &std::path::Path, duration: f64) -> QItem {
-        QItem { uid: 0, track_id: id, path: path.to_string_lossy().into_owned(), duration }
+        QItem { uid: 0, track_id: id, path: path.to_string_lossy().into_owned(), duration, rg: ReplayGain::default() }
     }
 
     #[test]

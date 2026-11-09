@@ -80,6 +80,34 @@ function lyricsToggle(): HTMLElement {
   return h("label", { class: "check" }, box, "Look up lyrics online");
 }
 
+function replayGainSection(): HTMLElement[] {
+  const modes = ["off", "track", "album"];
+  const select = h("select", { class: "input" });
+  for (const [k, label] of [
+    ["off", "Off"],
+    ["track", "Track: every song at the same loudness"],
+    ["album", "Album: keep the loudness differences within an album"],
+  ]) {
+    select.append(h("option", { value: k, selected: (store.settings.replayGain || "off") === k }, label));
+  }
+  select.addEventListener("change", () =>
+    run(async () => {
+      store.settings.replayGain = select.value;
+      store.emit("settings");
+      await api.cmd("replayGain", modes.indexOf(select.value));
+    }),
+  );
+  return [
+    h("h3", {}, "Playback"),
+    h("label", { class: "field inline" }, h("span", {}, "ReplayGain"), select),
+    h(
+      "p",
+      { class: "muted" },
+      "Evens out the volume between songs using the ReplayGain tags in your files, without changing the files. Songs without the tags play as they are; a ReplayGain scanner can add them.",
+    ),
+  ];
+}
+
 /** The listening history switch, with how much is kept and a way to clear it. */
 function listeningSection(): HTMLElement[] {
   const box = h("input", { type: "checkbox", checked: store.settings.listenLog === "on" });
@@ -425,6 +453,7 @@ export async function openSettings() {
       }),
     ),
     h("p", { class: "muted" }, `${store.libraryCount().toLocaleString()} tracks in library. Honeycomb never moves or deletes your files.`),
+    ...replayGainSection(),
     h("h3", {}, "Lyrics"),
     lyricsToggle(),
     h(

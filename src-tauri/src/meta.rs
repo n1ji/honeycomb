@@ -9,7 +9,7 @@ use lofty::picture::{MimeType, Picture, PictureType};
 use lofty::prelude::*;
 use lofty::tag::Tag;
 
-use crate::models::{TagEdit, Track, now_secs};
+use crate::models::{ReplayGain, TagEdit, Track, now_secs};
 
 /// Extensions we can both read tags from and decode for playback.
 pub const AUDIO_EXTS: &[&str] = &["mp3", "flac", "m4a", "mp4", "aac", "ogg", "oga", "wav", "aif", "aiff"];
@@ -97,7 +97,21 @@ pub fn read_track_with(path: &Path, has_folder_art: &dyn Fn(&Path) -> bool) -> R
         loved: false,
         inbox: false,
         bit_depth: props.bit_depth(),
+        rg: ReplayGain {
+            track_gain: number(&text(ItemKey::ReplayGainTrackGain)),
+            track_peak: number(&text(ItemKey::ReplayGainTrackPeak)).filter(|p| *p > 0.0),
+            album_gain: number(&text(ItemKey::ReplayGainAlbumGain)),
+            album_peak: number(&text(ItemKey::ReplayGainAlbumPeak)).filter(|p| *p > 0.0),
+        },
     })
+}
+
+/// A ReplayGain value: "-6.54 dB", "+1.2 dB", "0.988547", or with a decimal comma.
+fn number(s: &str) -> Option<f32> {
+    let s = s.trim();
+    let s = s.strip_suffix("dB").or_else(|| s.strip_suffix("db")).or_else(|| s.strip_suffix("DB")).unwrap_or(s);
+    let v: f32 = s.trim().replace(',', ".").parse().ok()?;
+    (v.is_finite() && v.abs() < 100.0).then_some(v)
 }
 
 /// Look for cover.jpg / folder.png etc. next to the file.
@@ -287,6 +301,64 @@ mod tests {
         let bad = TagEdit { art_path: Some(dir.join("missing.png").to_string_lossy().into()), ..Default::default() };
         assert!(write_tags(&path, &bad).is_err());
         assert_eq!(fs::read(&path).unwrap(), before);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn replaygain_values_parse() {
+        assert_eq!(number("-6.54 dB"), Some(-6.54));
+        assert_eq!(number("+1.20 dB"), Some(1.2));
+        assert_eq!(number(" -3,5 db "), Some(-3.5));
+        assert_eq!(number("0.988547"), Some(0.988547));
+        assert_eq!(number(""), None);
+        assert_eq!(number("loud"), None);
+        assert_eq!(number("NaN"), None);
+    }
+
+    /// Needs ffmpeg. ReplayGain comes through from ID3v2 (TXXX), Vorbis
+    /// comments and MP4 freeform atoms (written with lofty; ffmpeg can't).
+    #[test]
+    fn replaygain_is_read_from_every_format() {
+        let dir = std::env::temp_dir().join(format!("hc-rg-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        for ext in ["mp3", "flac", "ogg", "m4a"] {
+            let path = dir.join(format!("t.{ext}"));
+            let ok = std::process::Command::new("ffmpeg")
+                .args(["-loglevel", "error", "-f", "lavfi", "-i", "sine=duration=1"])
+                .args(["-metadata", "REPLAYGAIN_TRACK_GAIN=-7.25 dB", "-metadata", "REPLAYGAIN_TRACK_PEAK=0.912"])
+                .args(["-metadata", "REPLAYGAIN_ALBUM_GAIN=-8.50 dB", "-metadata", "REPLAYGAIN_ALBUM_PEAK=0.987"])
+                .args(if ext == "ogg" { &["-c:a", "vorbis", "-strict", "-2", "-ac", "2"][..] } else { &[][..] })
+                .arg(&path)
+                .status()
+                .is_ok_and(|s| s.success());
+            if !ok {
+                eprintln!("skipping: ffmpeg couldn't make a .{ext}");
+                continue;
+            }
+            if ext == "m4a" {
+                let mut tagged = lofty::read_from_path(&path).unwrap();
+                if tagged.primary_tag().is_none() {
+                    tagged.insert_tag(Tag::new(tagged.primary_tag_type()));
+                }
+                let tag = tagged.primary_tag_mut().unwrap();
+                for (k, v) in [
+                    (ItemKey::ReplayGainTrackGain, "-7.25 dB"),
+                    (ItemKey::ReplayGainTrackPeak, "0.912"),
+                    (ItemKey::ReplayGainAlbumGain, "-8.50 dB"),
+                    (ItemKey::ReplayGainAlbumPeak, "0.987"),
+                ] {
+                    tag.insert_text(k, v.into());
+                }
+                tagged.save_to_path(&path, WriteOptions::default()).unwrap();
+            }
+            let rg = read_track(&path).unwrap().rg;
+            assert_eq!(
+                rg,
+                ReplayGain { track_gain: Some(-7.25), track_peak: Some(0.912), album_gain: Some(-8.5), album_peak: Some(0.987) },
+                "{ext}"
+            );
+        }
         let _ = fs::remove_dir_all(&dir);
     }
 }
