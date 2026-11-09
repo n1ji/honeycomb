@@ -65,7 +65,7 @@ Everything finished so far, including items that were planned for later months a
 - 🚀 Multi-pick and right-click in the column browser.
 - 🚀 Listening history (what played, when, and how it ended), off until the user turns it on. The groundwork for sound-based playlists.
 - 🚀 Setup screen for new users (and once for existing ones), smoother motion, clickable artist and album names, Shuffle in the track menu.
-- Multi-device plan over OpenSubsonic (`docs/ARCHITECTURE.md`): approved, a document only, nothing built. The phone page (honeycomb.n1ji.dev/mobile) now describes it: the phone works on its own, with the desktop or with a music server.
+- Multi-device plan over OpenSubsonic (`docs/ARCHITECTURE.md`): approved. The desktop as a client of servers is built (🔧 on dev, see November); the rest is still a document. The phone page (honeycomb.n1ji.dev/mobile) now describes it: the phone works on its own, with the desktop or with a music server.
 
 ## Month 1 (November): ship something people can install
 
@@ -84,6 +84,7 @@ Everything finished so far, including items that were planned for later months a
 - 🚀 Unreadable files are remembered with the reason and skipped until they change; Settings → Library lists them (#6, was Month 5).
 - 🚀 Drag to reorder playlists and the queue; the playing song keeps playing. Dragging onto sidebar playlists works on Mac now too (was Month 6).
 - 🚀 Sync artists and albums to a device, not just playlists; later syncs pick up their new albums too (not on the plan, added along the way).
+- 🔧 Music servers: Navidrome and other OpenSubsonic servers as a library source, streaming through Kaseki (gapless), Keep album offline, plays, hearts, ratings and playlists going back to the server, and a Stream from servers quality setting (was Later, part of the multi-device plan).
 - 🟡 ReplayGain: track and album gain applied in Kaseki per track, Off / Track / Album setting (was Month 5). On dev, not tested by ear yet.
 
 **Done when:** a stranger can download an alpha for Mac or Linux, install it, and receive the next update automatically.
@@ -168,7 +169,7 @@ Moved here from April to keep 1.0 manageable:
 - Soft shadows and a little depth behind panels (no glass effects).
 - A cleanup script for contributors (`scripts/clean.sh`, dry run by default). Small enough to do any time.
 
-Multi-device over OpenSubsonic, planned in detail in `docs/ARCHITECTURE.md` (phases 1–6): the workspace split into shared crates, an OpenSubsonic server in the desktop app for paired phones, the desktop as a client of Navidrome and other Subsonic servers (streaming through Kaseki, pinning albums offline, ratings and play counts going back to the server), then the iOS app (separate, private repository) and cable sync. Phase 1 (the crate split) is small and could start early.
+Multi-device over OpenSubsonic, planned in detail in `docs/ARCHITECTURE.md` (phases 1–6): the workspace split into shared crates, an OpenSubsonic server in the desktop app for paired phones, the desktop as a client of Navidrome and other Subsonic servers (🔧 on dev since 2026-11-09: streaming through Kaseki, pinning albums offline, ratings and play counts going back to the server), then the iOS app (separate, private repository) and cable sync. Phase 1 (the crate split) is small and could start early.
 
 Sound-based playlists: score tracks by measured sound (grit, punch, density, BPM) with Honeycomb's own analysis code, learn from the listening history, and only then mix in Last.fm similarity. First step: BPM detection, filling a BPM column and smart rule.
 
