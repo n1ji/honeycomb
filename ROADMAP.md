@@ -33,7 +33,7 @@ These come first, ahead of the month order below:
 1. 🚀 **Remember unreadable files (#6, #2).** *Live in 0.2.0.* What's left for #2: look at Settings → Library → Unreadable files on the Windows library to see why those 64 files fail.
 2. 🚀 **Show the loved flag.** *Live in 0.2.0.* Hearts in the track list, the track menu and Now Playing. Next step: loves sync with Last.fm (Month 2).
 3. 🔧 **Linux on release tags.** *Done on dev:* release tags now build the Linux packages too. The distro test was the AppImage's self-test on Debian 13 (debsrv, under xvfb): the UI loaded in WebKitGTK, scanning worked and all 5 formats decoded. Still open: scrolling feel and real audio on a Linux desktop.
-4. **ReplayGain.** Read track and album gain and peak tags, apply them in Kaseki's gain stage (switching exactly at the gapless marker), with a setting (Off / Track / Album), clipping prevention from the peak, and a line in the signal path view.
+4. 🟡 **ReplayGain.** *On dev, still needs a listening test and a look at Settings → Playback; no pre-amp for untagged files yet.* Read track and album gain and peak tags, apply them in Kaseki's gain stage (switching exactly at the gapless marker), with a setting (Off / Track / Album), clipping prevention from the peak, and a line in the signal path view.
 5. **Watch library folders.** Use the `notify` crate to start the quick rescan a moment after files change, so new music lands in the Inbox without "Rescan now". If a scan is already running, run another one when it finishes.
 6. **Album art grid view.** A grid of albums for whatever the column browser and search currently show, with cached cover thumbnails so it stays fast at 100k tracks. Click to filter to the album, double-click to play it.
 
@@ -77,13 +77,14 @@ Everything finished so far, including items that were planned for later months a
 - 🚀 Performance baseline: 100k-track library, see `docs/perf-baseline.md` (startup 0.95 s, search ~65 ms, sort ~70 ms).
 - 🟡 Fix: removing the playing track stops playback (#4), and audio dies when headphones are unplugged (#5). Fixed in code and live in 0.1.1, still needs a listening test.
 
-**Done in November** (including items moved up from later months; all live in 0.2.0):
+**Done in November** (including items moved up from later months):
 
 - 🚀 Linux packages (AppImage, .deb, .rpm) in a release for the first time.
 - 🚀 Hearts for loved songs: a ♥ column, Love / Unlove in the track menu, and a heart in Now Playing (from "Next up").
 - 🚀 Unreadable files are remembered with the reason and skipped until they change; Settings → Library lists them (#6, was Month 5).
 - 🚀 Drag to reorder playlists and the queue; the playing song keeps playing. Dragging onto sidebar playlists works on Mac now too (was Month 6).
 - 🚀 Sync artists and albums to a device, not just playlists; later syncs pick up their new albums too (not on the plan, added along the way).
+- 🟡 ReplayGain: track and album gain applied in Kaseki per track, Off / Track / Album setting (was Month 5). On dev, not tested by ear yet.
 
 **Done when:** a stranger can download an alpha for Mac or Linux, install it, and receive the next update automatically.
 
@@ -134,7 +135,6 @@ Lyrics were done in October.
 
 - Watch library folders for new and changed files instead of manual rescans.
 - An album art grid view.
-- ReplayGain (track and album volume leveling).
 - A basic equalizer.
 - 🟡 Fix: changing the queue in the last 2 seconds of a track (#3) is fixed in code (live in 0.1.1) and needs a listening test. Unreadable files being re-read on every rescan (#6) is fixed on dev. Still open: why 64 files fail to read (#2); Settings → Library → Unreadable files now shows the reasons.
 
