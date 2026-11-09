@@ -6,14 +6,18 @@ mod lyrics;
 mod matching;
 mod media;
 mod meta;
+mod mirror;
 mod models;
 mod net;
 mod player;
 mod plugins;
 mod scanner;
 mod secrets;
+mod servers;
 mod smart;
 mod smoke;
+mod stream;
+mod subsonic;
 mod sync;
 mod version;
 
@@ -103,20 +107,20 @@ fn rescan(app: AppHandle, state: State<AppState>) {
 #[tauri::command]
 fn set_rating(state: State<AppState>, ids: Vec<i64>, rating: u8) -> CmdResult<()> {
     let conn = state.conn();
-    for id in ids {
+    for id in &ids {
         conn.execute("UPDATE tracks SET rating = ?2 WHERE id = ?1", rusqlite::params![id, rating.min(10)])
             .map_err(err)?;
     }
-    Ok(())
+    mirror::queue_rating(&conn, &ids, rating).map_err(err)
 }
 
 #[tauri::command]
 fn set_loved(state: State<AppState>, ids: Vec<i64>, loved: bool) -> CmdResult<()> {
     let conn = state.conn();
-    for id in ids {
+    for id in &ids {
         conn.execute("UPDATE tracks SET loved = ?2 WHERE id = ?1", rusqlite::params![id, loved]).map_err(err)?;
     }
-    Ok(())
+    mirror::queue_love(&conn, &ids, loved).map_err(err)
 }
 
 /// Add Inbox tracks to the library (all of them when `ids` is None).
@@ -200,6 +204,10 @@ fn edit_tags(state: State<AppState>, ids: Vec<i64>, edit: TagEdit) -> CmdResult<
     let mut updated = Vec::new();
     let mut failures = Vec::new();
     for t in tracks {
+        if mirror::is_remote(&t.path) {
+            failures.push(format!("{} is on a server, so its tags can't be edited here", t.title));
+            continue;
+        }
         let path = Path::new(&t.path);
         match meta::write_tags(path, &edit).and_then(|_| meta::read_track(path)) {
             Ok(fresh) => {
@@ -260,6 +268,7 @@ fn create_playlist(
     if let Some(ids) = track_ids {
         db::accept_tracks(&conn, &ids).map_err(err)?;
         db::set_playlist_track_ids(&mut conn, id, &ids).map_err(err)?;
+        mirror::queue_playlist(&conn, id).map_err(err)?;
     }
     Ok(Playlist { id, name, kind: kind.into(), rules })
 }
@@ -272,19 +281,20 @@ fn update_playlist(
     rules: Option<SmartRules>,
 ) -> CmdResult<()> {
     let rules_json = rules.as_ref().map(serde_json::to_string).transpose().map_err(err)?;
-    state
-        .conn()
-        .execute(
-            "UPDATE playlists SET name = ?2, rules = COALESCE(?3, rules) WHERE id = ?1",
-            rusqlite::params![id, name, rules_json],
-        )
-        .map_err(err)?;
-    Ok(())
+    let conn = state.conn();
+    conn.execute(
+        "UPDATE playlists SET name = ?2, rules = COALESCE(?3, rules) WHERE id = ?1",
+        rusqlite::params![id, name, rules_json],
+    )
+    .map_err(err)?;
+    mirror::queue_playlist(&conn, id).map_err(err)
 }
 
 #[tauri::command]
 fn delete_playlist(state: State<AppState>, id: i64) -> CmdResult<()> {
-    state.conn().execute("DELETE FROM playlists WHERE id = ?1", [id]).map_err(err)?;
+    let conn = state.conn();
+    mirror::queue_playlist_delete(&conn, id).map_err(err)?;
+    conn.execute("DELETE FROM playlists WHERE id = ?1", [id]).map_err(err)?;
     Ok(())
 }
 
@@ -308,7 +318,9 @@ fn preview_smart(state: State<AppState>, rules: SmartRules) -> CmdResult<usize> 
 
 #[tauri::command]
 fn set_playlist_tracks(state: State<AppState>, id: i64, track_ids: Vec<i64>) -> CmdResult<()> {
-    db::set_playlist_track_ids(&mut state.conn(), id, &track_ids).map_err(err)
+    let mut conn = state.conn();
+    db::set_playlist_track_ids(&mut conn, id, &track_ids).map_err(err)?;
+    mirror::queue_playlist(&conn, id).map_err(err)
 }
 
 #[tauri::command]
@@ -318,7 +330,8 @@ fn add_to_playlist(state: State<AppState>, id: i64, track_ids: Vec<i64>) -> CmdR
     // Putting a track on a playlist adds it to the library.
     db::accept_tracks(&conn, &track_ids).map_err(err)?;
     ids.extend(track_ids);
-    db::set_playlist_track_ids(&mut conn, id, &ids).map_err(err)
+    db::set_playlist_track_ids(&mut conn, id, &ids).map_err(err)?;
+    mirror::queue_playlist(&conn, id).map_err(err)
 }
 
 #[tauri::command]
@@ -423,15 +436,13 @@ fn save_text(path: String, text: String) -> CmdResult<()> {
 /// File extension for a track's cover ("jpg", "png"…), or None without one.
 #[tauri::command]
 async fn artwork_ext(state: State<'_, AppState>, track_id: i64) -> CmdResult<Option<String>> {
-    let path = db::track_by_id(&state.conn(), track_id).map_err(err)?.ok_or("track not found")?.path;
-    Ok(meta::artwork(Path::new(&path)).map(|(_, mime)| mime.rsplit('/').next().unwrap_or("jpg").replace("jpeg", "jpg")))
+    Ok(track_art(&state.conn(), track_id)?.map(|(_, mime)| mime.rsplit('/').next().unwrap_or("jpg").replace("jpeg", "jpg")))
 }
 
 /// Save a track's cover, as stored (no re-encoding), to `dest`.
 #[tauri::command]
 async fn save_artwork(state: State<'_, AppState>, track_id: i64, dest: String) -> CmdResult<()> {
-    let path = db::track_by_id(&state.conn(), track_id).map_err(err)?.ok_or("track not found")?.path;
-    let (data, _) = meta::artwork(Path::new(&path)).ok_or("this track has no artwork")?;
+    let (data, _) = track_art(&state.conn(), track_id)?.ok_or("this track has no artwork")?;
     std::fs::write(dest, data).map_err(err)
 }
 
@@ -663,18 +674,24 @@ fn player_remove(state: State<AppState>, indices: Vec<usize>) {
 
 // ---------- artwork protocol ----------
 
+/// A track's cover: from its file, or for a server song, from the server.
+fn track_art(conn: &Connection, track_id: i64) -> CmdResult<Option<(Vec<u8>, String)>> {
+    let path = db::track_by_id(conn, track_id).map_err(err)?.ok_or("track not found")?.path;
+    if mirror::is_remote(&path) {
+        return Ok(mirror::cover(conn, track_id));
+    }
+    Ok(meta::artwork(Path::new(&path)).map(|(d, m)| (d, m.to_string())))
+}
+
 /// Serves album art at `art://localhost/<track id>` (`http://art.localhost/<id>` on Windows).
 fn serve_art(app: &AppHandle, uri_path: &str) -> Response<Vec<u8>> {
     let not_found = || Response::builder().status(StatusCode::NOT_FOUND).body(Vec::new()).unwrap();
     let Ok(id) = uri_path.trim_matches('/').parse::<i64>() else {
         return not_found();
     };
-    let state = app.state::<AppState>();
-    let path = match db::track_by_id(&state.conn(), id) {
-        Ok(Some(t)) => t.path,
-        _ => return not_found(),
-    };
-    match meta::artwork(Path::new(&path)) {
+    // A connection of its own, so fetching a server's cover doesn't hold up the library.
+    let Ok(conn) = db::open(&app.state::<AppState>().db_path) else { return not_found() };
+    match track_art(&conn, id).ok().flatten() {
         Some((data, mime)) => Response::builder()
             .header(header::CONTENT_TYPE, mime)
             .header(header::CACHE_CONTROL, "max-age=86400")
@@ -750,6 +767,9 @@ pub fn run() {
             };
             let conn = db::open(&db_path)?;
             db::migrate(&conn)?;
+            mirror::migrate(&conn)?;
+            mirror::init(&db_path, &dir);
+            kaseki::set_opener(mirror::resolve);
             let test_library = std::env::var_os("HONEYCOMB_DATA_DIR").is_some() || smoke::folder().is_some();
             secrets::init(&app.config().identifier, test_library.then_some(dir.as_path()));
             secrets::migrate(&conn);
@@ -768,6 +788,7 @@ pub fn run() {
                 sync_cancel: Arc::new(AtomicBool::new(false)),
                 plugins: plugins::Dirs { user: plugins_dir, bundled },
             });
+            servers::spawn_worker(app.handle().clone());
             if let Some(folder) = smoke::folder() {
                 smoke::spawn(app.handle().clone(), folder);
             }
@@ -829,6 +850,13 @@ pub fn run() {
             player_move,
             player_cmd,
             player_remove,
+            servers::servers,
+            servers::server_add,
+            servers::server_sync,
+            servers::server_remove,
+            servers::remote_states,
+            servers::remote_pin,
+            servers::remote_unpin,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

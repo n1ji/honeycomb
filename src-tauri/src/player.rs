@@ -676,7 +676,8 @@ impl<R: Runtime> Engine<R> {
         if self.sent_plan.as_ref() == Some(&key) {
             return;
         }
-        let items = idxs.iter().map(|&i| (self.queue[i].uid, self.queue[i].path.clone())).collect();
+        let items: Vec<(u64, String)> = idxs.iter().map(|&i| (self.queue[i].uid, self.queue[i].path.clone())).collect();
+        crate::mirror::prefetch(items.iter().map(|i| i.1.as_str()));
         let _ = self.dec.send(DecMsg::Plan { epoch: self.epoch, base, items });
         self.sent_plan = Some(key);
     }
@@ -984,6 +985,7 @@ impl<R: Runtime> Engine<R> {
         let when = now_secs();
         if let Ok(conn) = db::open(&self.db_path) {
             let _ = db::record_play(&conn, track_id, when);
+            let _ = crate::mirror::note_play(&conn, track_id, when);
         }
         let _ = self.app.emit(
             "track-played",

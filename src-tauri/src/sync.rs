@@ -484,6 +484,16 @@ pub fn run(
     }
 
     let (tracks, lists) = selection(conn, p, resolve)?;
+    let tracks: Vec<Track> = tracks
+        .into_iter()
+        .filter_map(|t| match crate::mirror::local_file(conn, &t) {
+            Some(f) => Some(Track { path: f.to_string_lossy().into_owned(), ..t }),
+            None => {
+                report.failed.push(format!("{} - {}: on the server only; make it available offline to sync it", t.artist, t.title));
+                None
+            }
+        })
+        .collect();
     let convs: Vec<Option<Convert>> = tracks.iter().map(|t| conversion(p, t)).collect();
     let paths = assign_paths(&tracks, &convs);
     let wanted: HashSet<&str> = paths.iter().map(String::as_str).collect();

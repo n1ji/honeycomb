@@ -74,7 +74,7 @@ pub(crate) fn scan(db_path: &Path, progress: &dyn Fn(Progress)) -> Result<Finish
         .collect();
 
     let known: HashMap<String, i64> = {
-        let mut stmt = conn.prepare("SELECT path, mtime FROM tracks")?;
+        let mut stmt = conn.prepare("SELECT path, mtime FROM tracks WHERE path NOT LIKE 'subsonic://%'")?;
         let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
         rows.collect::<rusqlite::Result<_>>()?
     };
