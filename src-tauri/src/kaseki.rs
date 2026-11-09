@@ -391,14 +391,33 @@ pub struct SourceInfo {
     pub channels: Option<usize>,
 }
 
+/// Opens paths that aren't files on this computer, such as songs on a server:
+/// `None` for paths it doesn't handle, else the audio and its file extension.
+pub type Opener = fn(&str) -> Option<Result<(Box<dyn symphonia::core::io::MediaSource>, String), String>>;
+
+static OPENER: std::sync::OnceLock<Opener> = std::sync::OnceLock::new();
+
+pub fn set_opener(opener: Opener) {
+    let _ = OPENER.set(opener);
+}
+
+fn open_media(path: &str) -> Result<(Box<dyn symphonia::core::io::MediaSource>, String), String> {
+    if let Some(opened) = OPENER.get().and_then(|f| f(path)) {
+        return opened;
+    }
+    let file = File::open(path).map_err(|e| format!("Can't open {path}: {e}"))?;
+    let ext = std::path::Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or_default();
+    Ok((Box::new(file), ext.to_ascii_lowercase()))
+}
+
 /// Read a file's codec details without decoding any of it.
 pub fn probe(path: &str) -> Option<SourceInfo> {
-    let file = File::open(path).ok()?;
+    let (media, ext) = open_media(path).ok()?;
     let mut hint = Hint::new();
-    if let Some(ext) = std::path::Path::new(path).extension().and_then(|e| e.to_str()) {
-        hint.with_extension(ext);
+    if !ext.is_empty() {
+        hint.with_extension(&ext);
     }
-    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+    let mss = MediaSourceStream::new(media, Default::default());
     catch_unwind(AssertUnwindSafe(|| {
         let probed = symphonia::default::get_probe()
             .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
@@ -456,21 +475,16 @@ type Buf = (Vec<f32>, usize, u32);
 
 impl Source {
     pub fn open(path: &str) -> Result<Source, String> {
-        let file = File::open(path).map_err(|e| format!("Can't open {path}: {e}"))?;
-        let ext = std::path::Path::new(path)
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or_default()
-            .to_ascii_lowercase();
+        let (media, ext) = open_media(path)?;
         // Decoders for unusual files have been known to panic; never let that
         // take a thread down with it.
-        catch_unwind(AssertUnwindSafe(|| Self::open_file(file, &ext)))
+        catch_unwind(AssertUnwindSafe(|| Self::open_media(media, &ext)))
             .map_err(|_| format!("Can't decode {path}: decoder crashed"))?
             .map_err(|e| format!("Can't decode {path}: {e}"))
     }
 
-    fn open_file(file: File, ext: &str) -> Result<Source, String> {
-        let mss = MediaSourceStream::new(Box::new(file), Default::default());
+    fn open_media(media: Box<dyn symphonia::core::io::MediaSource>, ext: &str) -> Result<Source, String> {
+        let mss = MediaSourceStream::new(media, Default::default());
         let mut hint = Hint::new();
         if !ext.is_empty() {
             hint.with_extension(ext);
@@ -1717,5 +1731,62 @@ pub(crate) mod tests {
         rig.run_to_end(1);
         let secs = rig.got.len() as f64 / 2.0 / 44100.0;
         assert!((secs - 2.0).abs() < 0.05, "played {secs:.3} s of 2 s");
+    }
+
+    /// Serves each file under `/<name>` in small, slow pieces.
+    fn slow_server(dir: PathBuf) -> String {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            for s in listener.incoming() {
+                let Ok(mut s) = s else { continue };
+                let dir = dir.clone();
+                std::thread::spawn(move || {
+                    let mut req = [0u8; 1024];
+                    let n = s.read(&mut req).unwrap_or(0);
+                    let line = String::from_utf8_lossy(&req[..n]).to_string();
+                    let name = line.split_whitespace().nth(1).unwrap_or("/").trim_start_matches('/').to_string();
+                    let body = std::fs::read(dir.join(name)).unwrap_or_default();
+                    let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Type: audio/wav\r\nContent-Length: {}\r\n\r\n", body.len());
+                    for piece in body.chunks(4096) {
+                        let _ = s.write_all(piece);
+                        std::thread::sleep(Duration::from_millis(2));
+                    }
+                });
+            }
+        });
+        url
+    }
+
+    fn stream_opener(path: &str) -> Option<Result<(Box<dyn symphonia::core::io::MediaSource>, String), String>> {
+        let url = path.strip_prefix("teststream:")?.to_string();
+        let name = url.rsplit('/').next().unwrap_or("x").to_string();
+        let cache = tmp(&format!("cache-{name}"));
+        let _ = std::fs::remove_file(&cache);
+        Some(match crate::stream::open(&cache, || ureq::get(&url)) {
+            Ok(crate::stream::Opened::Stream(r)) => Ok((Box::new(r) as Box<dyn symphonia::core::io::MediaSource>, "wav".into())),
+            Ok(crate::stream::Opened::File(f)) => Ok((Box::new(f) as Box<dyn symphonia::core::io::MediaSource>, "wav".into())),
+            Err(e) => Err(e.to_string()),
+        })
+    }
+
+    #[test]
+    fn streamed_tracks_stay_gapless() {
+        let dir = tmp("streamed");
+        std::fs::create_dir_all(&dir).unwrap();
+        write_wav(&dir.join("sa.wav"), 44100, 30000, |i| ramp(i));
+        write_wav(&dir.join("sb.wav"), 44100, 21000, |i| ramp(i + 30000));
+        let url = slow_server(dir);
+        set_opener(stream_opener);
+        let mut rig = Rig::new(44100, 4096);
+        let source = Box::new(Source::open(&format!("teststream:{url}/sa.wav")).unwrap());
+        rig.dec.handle(DecMsg::Start { epoch: 1, uid: 1, source, pos: 0.0, gain: 1.0 });
+        rig.dec.handle(DecMsg::Plan { epoch: 1, base: 0, items: vec![PlanItem { uid: 2, path: format!("teststream:{url}/sb.wav"), gain: 1.0 }] });
+        rig.run_to_end(1);
+        assert_eq!(rig.got.len(), 51000 * 2);
+        for (i, f) in rig.got.chunks_exact(2).enumerate() {
+            assert_eq!(to_i16(f[0]), ramp(i as u32), "frame {i}");
+        }
     }
 }

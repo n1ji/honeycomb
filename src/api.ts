@@ -31,6 +31,33 @@ export interface Track {
   bitDepth: number | null;
 }
 
+/** A Subsonic or OpenSubsonic server the library mirrors. */
+export interface Server {
+  id: number;
+  name: string;
+  url: string;
+  username: string;
+  server: string;
+  version: string;
+  lastSync: number | null;
+  error: string | null;
+  tracks: number;
+  /** Songs kept on this computer. */
+  pinned: number;
+  /** Changes not sent to the server yet. */
+  waiting: number;
+}
+
+/** `remote`: on the server only; `downloading`/`pinned`: an offline copy on its way or kept; `local-only`: kept, gone from the server. */
+export type RemoteState = "remote" | "downloading" | "pinned" | "local-only";
+
+export interface ServerSync {
+  id: number;
+  songs: number;
+  done: boolean;
+  error: string | null;
+}
+
 /** A file removed from the Inbox that scans skip. */
 /** A file the scanner couldn't read, and why. */
 export interface UnreadableFile {
@@ -273,6 +300,15 @@ export const api = {
   updateStatus: (refresh = false) => invoke<UpdateStatus>("update_status", { refresh }),
   /** Downloads, installs and restarts; resolves only if something went wrong before the restart. */
   updateInstall: () => invoke<void>("update_install"),
+
+  servers: () => invoke<Server[]>("servers"),
+  serverAdd: (url: string, username: string, password: string) => invoke<number>("server_add", { url, username, password }),
+  serverSync: (id: number) => invoke<void>("server_sync", { id }),
+  serverRemove: (id: number, keep: boolean) => invoke<{ kept: number; deleted: number; folder: string | null }>("server_remove", { id, keep }),
+  remoteStates: () => invoke<{ ids: number[]; states: RemoteState[] }>("remote_states"),
+  /** Keep songs on this computer; with `albums`, their whole albums, including songs added later. */
+  remotePin: (ids: number[], albums: boolean) => invoke<number>("remote_pin", { ids, albums }),
+  remoteUnpin: (ids: number[]) => invoke<void>("remote_unpin", { ids }),
 
   load: (trackIds: number[], index: number) => invoke<void>("player_load", { trackIds, index }),
   enqueue: (trackIds: number[], next: boolean) => invoke<void>("player_enqueue", { trackIds, next }),

@@ -7,6 +7,7 @@ import { button, modal } from "./dialogs";
 import { openColumnsCustomizer, openPlayerBarCustomizer, setLayoutSetting } from "./customize";
 import { openImporter } from "./importer";
 import { pluginsSection } from "./pluginsettings";
+import { openAddServer, serverRows, streamQuality } from "./servers";
 
 export const ACCENTS = ["#f5a623", "#e8590c", "#e03131", "#d6336c", "#ae3ec9", "#4c6ef5", "#1c7ed6", "#0ca678", "#74b816"];
 
@@ -334,10 +335,14 @@ export async function openSettings() {
 
   // Library folders
   const folderList = h("ul", { class: "folders" });
+  const serverOptions = h("div");
   const renderFolders = async () => {
     const folders = await api.getFolders();
+    const servers = await serverRows(renderFolders);
+    serverOptions.replaceChildren(...(servers.length ? [streamQuality(setSetting)] : []));
     folderList.replaceChildren(
-      ...(folders.length
+      ...servers,
+      ...(folders.length || servers.length
         ? folders.map((f) =>
             h(
               "li",
@@ -444,6 +449,7 @@ export async function openSettings() {
       "div",
       { class: "row" },
       button("Add folder…", addFolder, true),
+      button("Add a server…", () => openAddServer(() => run(renderFolders))),
       button("Rescan now", () => run(api.rescan)),
       button("Ignored files…", () => run(openIgnored)),
       unreadableButton(),
@@ -452,6 +458,7 @@ export async function openSettings() {
         openImporter();
       }),
     ),
+    serverOptions,
     h("p", { class: "muted" }, `${store.libraryCount().toLocaleString()} tracks in library. Honeycomb never moves or deletes your files.`),
     ...replayGainSection(),
     h("h3", {}, "Lyrics"),

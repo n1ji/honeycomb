@@ -120,6 +120,9 @@ pub fn update<R: Runtime>(app: &AppHandle<R>, np: Option<NowPlaying>) {
 
 /// Write a track's cover to the cache folder and return a file:// URL for it.
 pub fn cover_url<R: Runtime>(app: &AppHandle<R>, track_id: i64, audio_path: &str) -> Option<String> {
+    if crate::mirror::is_remote(audio_path) {
+        return crate::mirror::cover_file(track_id).map(|f| file_url(&f));
+    }
     let dir: PathBuf = app.path().app_cache_dir().ok()?.join("now-playing");
     std::fs::create_dir_all(&dir).ok()?;
     // The file's mtime is in the name, so editing a cover gets a fresh image.

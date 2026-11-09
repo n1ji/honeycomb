@@ -1,5 +1,5 @@
 import { listen } from "@tauri-apps/api/event";
-import { api, QueueState, Signal, Tick } from "./api";
+import { api, QueueState, ServerSync, Signal, Tick } from "./api";
 import { perfEnabled, runBenchmark } from "./perf";
 import { loadPlugins } from "./plugins";
 import { store } from "./store";
@@ -93,7 +93,16 @@ async function main() {
     toast(`Scan failed: ${e.payload}`, true);
   });
 
+  await listen("library-changed", () => run(() => Promise.all([store.loadRemote(), store.loadPlaylists(), store.loadTracks(true)])));
+  await listen("remote-states", () => run(() => store.loadRemote()));
+  await listen<ServerSync>("server-sync", (e) => {
+    const { songs, done, error } = e.payload;
+    sidebar.setStatus(done ? "" : `Syncing server… ${songs.toLocaleString()} songs`);
+    if (error) toast(`Server sync failed: ${error}`, true);
+  });
+
   await store.loadPlaylists();
+  await store.loadRemote();
   await store.loadTracks();
   const loaded = performance.now();
   await api.cmd("emit");

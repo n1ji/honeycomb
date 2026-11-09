@@ -738,13 +738,14 @@ impl<R: Runtime> Engine<R> {
         if self.sent_plan.as_ref() == Some(&key) {
             return;
         }
-        let items = idxs
+        let items: Vec<PlanItem> = idxs
             .iter()
             .map(|&i| {
                 let q = &self.queue[i];
                 PlanItem { uid: q.uid, path: q.path.clone(), gain: linear(replay_gain(&q.rg, self.rg_mode)) }
             })
             .collect();
+        crate::mirror::prefetch(items.iter().map(|i| i.path.as_str()));
         let _ = self.dec.send(DecMsg::Plan { epoch: self.epoch, base, items });
         self.sent_plan = Some(key);
     }
@@ -1055,6 +1056,7 @@ impl<R: Runtime> Engine<R> {
         let when = now_secs();
         if let Ok(conn) = db::open(&self.db_path) {
             let _ = db::record_play(&conn, track_id, when);
+            let _ = crate::mirror::note_play(&conn, track_id, when);
         }
         let _ = self.app.emit(
             "track-played",
@@ -1369,5 +1371,42 @@ mod tests {
                 rig.send(Cmd::Next);
             }
         }
+    }
+
+    /// Plays the test Navidrome's gapless album through the real output:
+    /// `HONEYCOMB_NAVIDROME=http://127.0.0.1:4533 cargo test --lib live_server_playback -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn live_server_playback() {
+        let Ok(url) = std::env::var("HONEYCOMB_NAVIDROME") else { return };
+        let dir = std::env::temp_dir().join(format!("hc-player-live-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let rig = Rig::new(&dir);
+        let db_path = dir.join("library.db");
+        let mut conn = db::open(&db_path).unwrap();
+        crate::mirror::migrate(&conn).unwrap();
+        crate::mirror::init(&db_path, &dir);
+        crate::kaseki::set_opener(crate::mirror::resolve);
+        let id = crate::mirror::add_source(&conn, &url, "honeycomb", "honeycomb-test").unwrap();
+        let client = crate::mirror::client(&conn, id).unwrap();
+        let pulled = crate::mirror::pull(&client, &|_| {}).unwrap();
+        crate::mirror::apply(&mut conn, id, &pulled).unwrap();
+        let mut suite: Vec<_> = db::all_tracks(&conn).unwrap().into_iter().filter(|t| t.album == "Continuous Suite").collect();
+        suite.sort_by_key(|t| t.track_no);
+        let items: Vec<QItem> = suite.iter().map(|t| QItem { uid: 0, track_id: t.id, path: t.path.clone(), duration: t.duration, rg: t.rg }).collect();
+        let (m2, m3) = (suite[1].id, suite[2].id);
+
+        rig.send(Cmd::Load(items, 1));
+        rig.wait("player-tick", 10.0, "movement 2 to stream", |t| t["trackId"] == m2 && t["playing"] == true);
+        rig.send(Cmd::Seek(suite[1].duration - 2.5));
+        let t = rig.wait("player-tick", 8.0, "movement 3 to follow", |t| t["trackId"] == m3);
+        assert!(t["position"].as_f64().unwrap() < 1.0, "a gap or a restart: {t}");
+        assert_eq!(rig.last("track-played").unwrap()["id"], m2);
+        rig.send(Cmd::Pause);
+        let waiting: i64 = conn.query_row("SELECT COUNT(*) FROM remote_outbox WHERE kind = 'play'", [], |r| r.get(0)).unwrap();
+        assert_eq!(waiting, 1, "the play waits for the server");
+        assert_eq!(crate::mirror::flush(&conn).unwrap(), 1);
+        crate::mirror::remove_source(&mut conn, id, None).unwrap();
     }
 }

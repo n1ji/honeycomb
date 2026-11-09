@@ -40,6 +40,8 @@ unicode-normalization = "0.1"
 # LRCLIB lyrics lookups.
 ureq = { version = "2", features = ["json"] }
 # Last.fm request signatures are MD5 hashes.
+# Subsonic servers sign logins with MD5 too.
+md-5 = "0.10"
 # Free space on a sync destination.
 fs2 = "0.4"
 souvlaki = { version = "0.9", default-features = false, features = ["use_zbus"] }

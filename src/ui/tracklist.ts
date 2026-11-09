@@ -361,13 +361,20 @@ function render() {
         const text = c.render ? c.render(t, i) : String(t[c.key] ?? "");
         // Artist and album names are links to that artist or album.
         const link = LINKED.has(c.key) && text ? h("span", { class: "tl-link", "data-go": c.key }, text) : text;
-        cell = h("div", { class: `tl-cell ${c.cls ?? ""}`, title: text }, link);
+        cell = h("div", { class: `tl-cell ${c.cls ?? ""}`, title: text }, c.key === "title" ? offlineMark(t.id) : null, link);
       }
       row.append(cell);
     }
     out.push(row);
   }
   rowsEl.replaceChildren(...out);
+}
+
+/** A dot on server songs kept on this computer, an arrow while one downloads. */
+function offlineMark(id: number): HTMLElement | null {
+  const s = store.remote.get(id);
+  if (!s || s === "remote") return null;
+  return s === "downloading" ? h("span", { class: "offline-mark", title: "Downloading to this computer" }, "↓") : h("span", { class: "offline-mark", title: "On this computer" }, "●");
 }
 
 /** Rows can be dragged into a new order in the queue and manual playlists, unless a column sort hides the real order. */
