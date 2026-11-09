@@ -554,7 +554,11 @@ impl<R: Runtime> Engine<R> {
                     self.resume = None;
                     self.set_paused(paused);
                     let uid = self.queue[i].uid;
-                    let gain = linear(replay_gain(&self.queue[i].rg, self.rg_mode));
+                    let db = replay_gain(&self.queue[i].rg, self.rg_mode);
+                    if self.rg_mode != RgMode::Off {
+                        eprintln!("replaygain: {:?} mode, {}", self.rg_mode, db.map_or("no tags".into(), |g| format!("{g:+.1} dB")));
+                    }
+                    let gain = linear(db);
                     let _ = self.dec.send(DecMsg::Start { epoch: self.epoch, uid, source: Box::new(source), pos, gain });
                     self.current = Some(i);
                     self.error = None;
