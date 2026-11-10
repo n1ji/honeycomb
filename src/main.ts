@@ -24,6 +24,8 @@ interface ScanFinished {
   removed: number;
   errors: number;
   inboxed: number;
+  /** Library folders that couldn't be read; nothing in them was removed. */
+  unreachable: string[];
 }
 interface Played {
   id: number;
@@ -79,13 +81,23 @@ async function main() {
   });
   await listen<ScanFinished>("scan-finished", (e) => {
     sidebar.setStatus("");
-    const { addedOrUpdated, removed, errors, inboxed } = e.payload;
+    const { addedOrUpdated, removed, errors, inboxed, unreachable } = e.payload;
+    const parts: string[] = [];
     if (addedOrUpdated || removed) {
-      toast(
-        `Library updated: ${addedOrUpdated} added or changed, ${removed} removed${errors ? `, ${errors} unreadable` : ""}` +
-          (inboxed ? `. ${inboxed} new in Inbox.` : ""),
+      parts.push(
+        `Library updated: ${addedOrUpdated} added or changed, ${removed} removed${errors ? `, ${errors} unreadable` : ""}.` +
+          (inboxed ? ` ${inboxed} new in Inbox.` : ""),
       );
     }
+    // A drive that isn't plugged in: its music stays in the library until it's back.
+    if (unreachable.length) {
+      parts.push(
+        unreachable.length === 1
+          ? `Couldn't reach ${unreachable[0]}; its tracks were kept.`
+          : `Couldn't reach ${unreachable.length} folders; their tracks were kept.`,
+      );
+    }
+    if (parts.length) toast(parts.join(" "));
     run(() => store.loadTracks(true));
   });
   await listen<string>("scan-error", (e) => {

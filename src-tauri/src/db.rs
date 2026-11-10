@@ -362,9 +362,11 @@ pub fn clear_listens(conn: &Connection) -> Result<()> {
 
 /// Take tracks out of the Inbox and into the library.
 pub fn accept_tracks(conn: &Connection, ids: &[i64]) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
     for id in ids {
-        conn.execute("UPDATE tracks SET inbox = 0 WHERE id = ?1", [id])?;
+        tx.execute("UPDATE tracks SET inbox = 0 WHERE id = ?1", [id])?;
     }
+    tx.commit()?;
     Ok(())
 }
 

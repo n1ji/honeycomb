@@ -30,32 +30,57 @@ pub(crate) struct Finished {
     pub removed: usize,
     pub errors: usize,
     pub inboxed: usize,
+    /// Library folders that couldn't be read (a drive that isn't plugged in,
+    /// a share that's offline). Their tracks are kept as they are.
+    pub unreachable: Vec<String>,
 }
 
 /// Scan every library folder on a background thread. Unchanged files (same
 /// mtime) are skipped; files that disappeared are removed from the library.
 pub fn spawn_scan(app: AppHandle, db_path: PathBuf, scanning: Arc<AtomicBool>) {
     if scanning.swap(true, Ordering::SeqCst) {
+        // The running scan may already be past what changed (a folder added
+        // or removed meanwhile), so it's followed by another.
+        AGAIN.store(true, Ordering::SeqCst);
         return;
     }
     std::thread::spawn(move || {
-        let progress = |p: Progress| {
-            let _ = app.emit("scan-progress", p);
-        };
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| scan(&db_path, &progress)));
-        scanning.store(false, Ordering::SeqCst);
-        match result {
-            Ok(Ok(f)) => {
-                let _ = app.emit("scan-finished", f);
+        run_until_settled(&scanning, &AGAIN, || {
+            let progress = |p: Progress| {
+                let _ = app.emit("scan-progress", p);
+            };
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| scan(&db_path, &progress)));
+            match result {
+                Ok(Ok(f)) => {
+                    let _ = app.emit("scan-finished", f);
+                }
+                Ok(Err(e)) => {
+                    let _ = app.emit("scan-error", e.to_string());
+                }
+                Err(_) => {
+                    let _ = app.emit("scan-error", "the scanner crashed".to_string());
+                }
             }
-            Ok(Err(e)) => {
-                let _ = app.emit("scan-error", e.to_string());
-            }
-            Err(_) => {
-                let _ = app.emit("scan-error", "the scanner crashed".to_string());
-            }
-        }
+        });
     });
+}
+
+/// A scan was asked for while one was running.
+static AGAIN: AtomicBool = AtomicBool::new(false);
+
+/// Run `once`, then again for as long as another run was asked for in the
+/// meantime. `scanning` is set on entry and cleared when this returns, unless
+/// a scan started elsewhere has taken over.
+fn run_until_settled(scanning: &AtomicBool, again: &AtomicBool, mut once: impl FnMut()) {
+    loop {
+        // Requests from before this run starts are covered by it.
+        again.store(false, Ordering::SeqCst);
+        once();
+        scanning.store(false, Ordering::SeqCst);
+        if !again.swap(false, Ordering::SeqCst) || scanning.swap(true, Ordering::SeqCst) {
+            return;
+        }
+    }
 }
 
 pub(crate) fn scan(db_path: &Path, progress: &dyn Fn(Progress)) -> Result<Finished> {
@@ -65,19 +90,47 @@ pub(crate) fn scan(db_path: &Path, progress: &dyn Fn(Progress)) -> Result<Finish
     let established: Vec<PathBuf> = db::scanned_folders(&conn)?.into_iter().map(PathBuf::from).collect();
 
     let ignored: HashSet<String> = db::ignored(&conn)?.into_iter().map(|(p, _)| p).collect();
-    let files: Vec<PathBuf> = folders
-        .iter()
-        .flat_map(|f| WalkDir::new(f).follow_links(true).into_iter().filter_map(|e| e.ok()))
-        .filter(|e| e.file_type().is_file() && meta::is_audio(e.path()))
-        .map(|e| e.into_path())
-        .filter(|p| !ignored.contains(p.to_string_lossy().as_ref()))
-        .collect();
-
     let known: HashMap<String, i64> = {
         let mut stmt = conn.prepare("SELECT path, mtime FROM tracks WHERE path NOT LIKE 'subsonic://%'")?;
         let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
         rows.collect::<rusqlite::Result<_>>()?
     };
+
+    // Not finding a file only means it's gone if its folder could be read.
+    // Folders (and subfolders) that couldn't are collected here, and nothing
+    // under them is dropped from the library.
+    let mut unreachable: Vec<PathBuf> = Vec::new();
+    let mut files: Vec<PathBuf> = Vec::new();
+    for folder in &folders {
+        let root = Path::new(folder);
+        // A drive that isn't plugged in, or a share that's offline.
+        if std::fs::read_dir(root).is_err() {
+            unreachable.push(root.to_path_buf());
+            continue;
+        }
+        let mut found = 0;
+        for entry in WalkDir::new(root).follow_links(true) {
+            match entry {
+                Ok(e) if e.file_type().is_file() && meta::is_audio(e.path()) => {
+                    found += 1;
+                    let p = e.into_path();
+                    if !ignored.contains(p.to_string_lossy().as_ref()) {
+                        files.push(p);
+                    }
+                }
+                Ok(_) => {}
+                // A subfolder that can't be opened (no permission, a failing disk).
+                Err(e) => unreachable.extend(e.path().map(Path::to_path_buf)),
+            }
+        }
+        // An empty folder that used to hold music is far more often a mount
+        // point with nothing mounted on it (Linux leaves those in place) than
+        // a collection deleted to the last file.
+        if found == 0 && known.keys().any(|p| Path::new(p).starts_with(root)) {
+            unreachable.push(root.to_path_buf());
+        }
+    }
+    let kept = |p: &str| unreachable.iter().any(|u| Path::new(p).starts_with(u));
 
     // Files that failed before are skipped until their mtime changes.
     let unreadable: HashMap<String, i64> = {
@@ -192,7 +245,7 @@ pub(crate) fn scan(db_path: &Path, progress: &dyn Fn(Progress)) -> Result<Finish
     })?;
 
     // Drop tracks whose files are gone or no longer under a library folder.
-    let mut stale: Vec<&String> = known.keys().filter(|p| !seen.contains(*p)).collect();
+    let mut stale: Vec<&String> = known.keys().filter(|p| !seen.contains(*p) && !kept(p)).collect();
     conn.execute_batch("BEGIN")?;
     let moved = find_moves(&conn, &stale, &fresh)?;
     for (old, _, new, new_inboxed) in &moved {
@@ -221,13 +274,23 @@ pub(crate) fn scan(db_path: &Path, progress: &dyn Fn(Progress)) -> Result<Finish
     for p in &stale {
         conn.execute("DELETE FROM tracks WHERE path = ?1", [p])?;
     }
-    for p in unreadable.keys().filter(|p| !seen.contains(*p)) {
+    for p in unreadable.keys().filter(|p| !seen.contains(*p) && !kept(p)) {
         conn.execute("DELETE FROM unreadable WHERE path = ?1", [p])?;
     }
-    conn.execute("UPDATE folders SET scanned = 1", [])?;
+    // A folder that couldn't be read hasn't had its first scan yet; marking it
+    // would send its whole contents to the Inbox once it's back.
+    for folder in folders.iter().filter(|f| !unreachable.iter().any(|u| u == Path::new(f))) {
+        conn.execute("UPDATE folders SET scanned = 1 WHERE path = ?1", [folder])?;
+    }
     conn.execute_batch("COMMIT")?;
 
-    Ok(Finished { added_or_updated: changed, removed: stale.len(), errors, inboxed })
+    Ok(Finished {
+        added_or_updated: changed,
+        removed: stale.len(),
+        errors,
+        inboxed,
+        unreachable: unreachable.iter().map(|p| p.to_string_lossy().into_owned()).collect(),
+    })
 }
 
 /// A short reason a file couldn't be read, for Settings → Library.
@@ -398,6 +461,93 @@ mod tests {
         );
         assert_eq!(db::manual_playlist_track_ids(&conn, pl).unwrap(), [id]);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A library folder on a drive that isn't plugged in (or a share that's
+    /// offline) must not cost its tracks their ratings, play counts and
+    /// playlist spots.
+    #[test]
+    fn unreachable_folders_keep_their_tracks() {
+        let root = std::env::temp_dir().join(format!("hc-offline-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (home, drive) = (root.join("home"), root.join("drive"));
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&drive).unwrap();
+        write_wav(&home.join("here.wav"));
+        write_wav(&drive.join("away.wav"));
+        let db_path = root.join("library.db");
+        let conn = db::open(&db_path).unwrap();
+        db::migrate(&conn).unwrap();
+        for f in [&home, &drive] {
+            conn.execute("INSERT INTO folders (path) VALUES (?1)", [f.to_string_lossy()]).unwrap();
+        }
+        let quiet = |_: Progress| {};
+        scan(&db_path, &quiet).unwrap();
+        let away = db::track_id_by_path(&conn, &drive.join("away.wav").to_string_lossy()).unwrap().unwrap();
+        conn.execute("UPDATE tracks SET rating = 9 WHERE id = ?1", [away]).unwrap();
+        let rating = |conn: &rusqlite::Connection| -> Option<u8> {
+            db::track_by_id(conn, away).unwrap().map(|t| t.rating)
+        };
+
+        // Unplugged on macOS and Windows: the folder is gone.
+        let parked = root.join("parked");
+        std::fs::rename(&drive, &parked).unwrap();
+        let f = scan(&db_path, &quiet).unwrap();
+        assert_eq!(f.removed, 0);
+        assert_eq!(f.unreachable, [drive.to_string_lossy()]);
+        assert_eq!(rating(&conn), Some(9), "the track and its rating survive");
+
+        // Unmounted on Linux: the mount point is still there, but empty.
+        std::fs::create_dir_all(&drive).unwrap();
+        let f = scan(&db_path, &quiet).unwrap();
+        assert_eq!(f.removed, 0);
+        assert_eq!(f.unreachable, [drive.to_string_lossy()]);
+        assert_eq!(rating(&conn), Some(9));
+
+        // Plugged back in: same row, nothing new, nothing in the inbox.
+        std::fs::remove_dir(&drive).unwrap();
+        std::fs::rename(&parked, &drive).unwrap();
+        let f = scan(&db_path, &quiet).unwrap();
+        assert_eq!((f.added_or_updated, f.removed, f.inboxed), (0, 0, 0));
+        assert!(f.unreachable.is_empty());
+        assert_eq!(rating(&conn), Some(9));
+
+        // A file that's really deleted from a folder that still has others goes.
+        write_wav(&drive.join("extra.wav"));
+        scan(&db_path, &quiet).unwrap();
+        std::fs::remove_file(drive.join("away.wav")).unwrap();
+        let f = scan(&db_path, &quiet).unwrap();
+        assert_eq!(f.removed, 1);
+        assert_eq!(rating(&conn), None);
+
+        // Removing the folder from the library still drops its tracks.
+        conn.execute("DELETE FROM folders WHERE path = ?1", [drive.to_string_lossy()]).unwrap();
+        let f = scan(&db_path, &quiet).unwrap();
+        assert_eq!(f.removed, 1);
+        assert_eq!(db::all_tracks(&conn).unwrap().len(), 1);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_scan_asked_for_during_a_scan_runs_afterwards() {
+        let (scanning, again) = (AtomicBool::new(true), AtomicBool::new(false));
+        let mut runs = 0;
+        run_until_settled(&scanning, &again, || {
+            runs += 1;
+            // Two folders are added while the first scan runs; one more scan covers both.
+            if runs == 1 {
+                again.store(true, Ordering::SeqCst);
+                again.store(true, Ordering::SeqCst);
+            }
+        });
+        assert_eq!(runs, 2);
+        assert!(!scanning.load(Ordering::SeqCst), "the next request starts a scan again");
+
+        // With nothing asked for meanwhile, it runs once.
+        scanning.store(true, Ordering::SeqCst);
+        let mut runs = 0;
+        run_until_settled(&scanning, &again, || runs += 1);
+        assert_eq!(runs, 1);
     }
 
     #[test]

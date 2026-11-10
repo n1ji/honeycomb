@@ -131,8 +131,30 @@ pub fn cover_url<R: Runtime>(app: &AppHandle<R>, track_id: i64, audio_path: &str
     if !file.is_file() {
         let (data, _mime) = crate::meta::artwork(std::path::Path::new(audio_path))?;
         std::fs::write(&file, data).ok()?;
+        prune_covers(&dir, COVERS_KEPT);
     }
     Some(file_url(&file))
+}
+
+/// Covers kept in the cache folder. The OS only ever shows the current one;
+/// a few more save writing the same image again when skipping back and forth.
+const COVERS_KEPT: usize = 20;
+
+/// Delete all but the `keep` newest covers, so the folder doesn't grow by one
+/// image for every song ever played.
+fn prune_covers(dir: &std::path::Path, keep: usize) {
+    let mut covers: Vec<(std::time::SystemTime, PathBuf)> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "img"))
+        .filter_map(|p| Some((p.metadata().ok()?.modified().ok()?, p)))
+        .collect();
+    covers.sort_by(|a, b| b.cmp(a));
+    for (_, old) in covers.into_iter().skip(keep) {
+        let _ = std::fs::remove_file(old);
+    }
 }
 
 fn file_url(path: &std::path::Path) -> String {
@@ -153,6 +175,27 @@ fn file_url(path: &std::path::Path) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_the_newest_covers_are_kept() {
+        let dir = std::env::temp_dir().join(format!("hc-covers-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let t0 = std::time::SystemTime::now() - std::time::Duration::from_secs(100);
+        for i in 0..5u64 {
+            let f = dir.join(format!("{i}-0.img"));
+            std::fs::write(&f, b"x").unwrap();
+            let when = t0 + std::time::Duration::from_secs(i * 10);
+            std::fs::File::options().write(true).open(&f).unwrap().set_modified(when).unwrap();
+        }
+        std::fs::write(dir.join("notes.txt"), b"not a cover").unwrap();
+        super::prune_covers(&dir, 2);
+        let mut left: Vec<String> =
+            std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        left.sort();
+        assert_eq!(left, ["3-0.img", "4-0.img", "notes.txt"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn file_urls_are_escaped() {
         assert_eq!(

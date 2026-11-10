@@ -107,19 +107,24 @@ fn rescan(app: AppHandle, state: State<AppState>) {
 #[tauri::command]
 fn set_rating(state: State<AppState>, ids: Vec<i64>, rating: u8) -> CmdResult<()> {
     let conn = state.conn();
+    // One transaction: saving row by row waits for the disk once per track.
+    let tx = conn.unchecked_transaction().map_err(err)?;
     for id in &ids {
-        conn.execute("UPDATE tracks SET rating = ?2 WHERE id = ?1", rusqlite::params![id, rating.min(10)])
+        tx.execute("UPDATE tracks SET rating = ?2 WHERE id = ?1", rusqlite::params![id, rating.min(10)])
             .map_err(err)?;
     }
+    tx.commit().map_err(err)?;
     mirror::queue_rating(&conn, &ids, rating).map_err(err)
 }
 
 #[tauri::command]
 fn set_loved(state: State<AppState>, ids: Vec<i64>, loved: bool) -> CmdResult<()> {
     let conn = state.conn();
+    let tx = conn.unchecked_transaction().map_err(err)?;
     for id in &ids {
-        conn.execute("UPDATE tracks SET loved = ?2 WHERE id = ?1", rusqlite::params![id, loved]).map_err(err)?;
+        tx.execute("UPDATE tracks SET loved = ?2 WHERE id = ?1", rusqlite::params![id, loved]).map_err(err)?;
     }
+    tx.commit().map_err(err)?;
     mirror::queue_love(&conn, &ids, loved).map_err(err)
 }
 
