@@ -84,7 +84,7 @@ Everything finished so far, including items that were planned for later months a
 - 🚀 Unreadable files are remembered with the reason and skipped until they change; Settings → Library lists them (#6, was Month 5).
 - 🚀 Drag to reorder playlists and the queue; the playing song keeps playing. Dragging onto sidebar playlists works on Mac now too (was Month 6).
 - 🚀 Sync artists and albums to a device, not just playlists; later syncs pick up their new albums too (not on the plan, added along the way).
-- 🔧 Music servers: Navidrome and other OpenSubsonic servers as a library source, streaming through Kaseki (gapless), Keep album offline, plays, hearts, ratings and playlists going back to the server, and a Stream from servers quality setting (was Later, part of the multi-device plan).
+- 🔧 Music servers: Navidrome and other OpenSubsonic servers as a library source, streaming through Kaseki (gapless), Keep album offline, plays, hearts, ratings and playlists going back to the server, a Stream from servers quality setting, and client certificates (.p12) for servers behind Cloudflare Access and similar (was Later, part of the multi-device plan).
 - 🔧 Folders that can't be reached during a scan (an unplugged drive, a sleeping network share) keep their songs, with their stats and playlist spots, instead of being dropped (not on the plan; known issues now listed in `docs/known-issues.md`).
 - 🟡 ReplayGain: track and album gain applied in Kaseki per track, Off / Track / Album setting (was Month 5). On dev, not tested by ear yet.
 
