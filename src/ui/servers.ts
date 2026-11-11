@@ -1,6 +1,6 @@
 // Servers (Navidrome and other OpenSubsonic servers) in Settings → Library:
 // their rows next to the folders, adding one, and how they stream.
-import { ask, open } from "@tauri-apps/plugin-dialog";
+import { ask, message, open } from "@tauri-apps/plugin-dialog";
 import { api, Server } from "../api";
 import { store } from "../store";
 import { fmtDate, h, toast } from "../util";
@@ -109,6 +109,13 @@ export function openAddServer(onAdded: () => void) {
           m.close();
           toast("Server added. Syncing its library…");
           onAdded();
+          if (scrobblingOn()) {
+            await message(
+              "Honeycomb's scrobbling plugin is on. If this server also sends your plays to Last.fm or ListenBrainz, every song you play from it will be counted twice.\n\n" +
+                "Pick one to do the scrobbling: turn it off in the server's settings, or turn off Honeycomb's plugin in Settings → Plugins.",
+              { title: "Scrobbling twice?", kind: "warning", okLabel: "Got it" },
+            );
+          }
         } catch (e) {
           status.textContent = String(e);
           status.classList.add("server-error");
