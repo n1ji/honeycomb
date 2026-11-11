@@ -71,13 +71,25 @@ async function main() {
   });
 
   let lastReload = 0;
+  let reloadGap = 4000;
+  let reloading = false;
   await listen<ScanProgress>("scan-progress", (e) => {
     const { done, total } = e.payload;
     sidebar.setStatus(`Scanning… ${done.toLocaleString()} / ${total.toLocaleString()}`);
-    // Show new music as it arrives on big first scans, without reloading constantly.
-    if (Date.now() - lastReload > 4000) {
-      lastReload = Date.now();
-      run(() => store.loadTracks(true));
+    // Show new music as it arrives on big first scans, without reloading
+    // constantly: a big library waits longer between reloads.
+    if (!reloading && Date.now() - lastReload > reloadGap) {
+      reloading = true;
+      const started = Date.now();
+      run(async () => {
+        try {
+          await store.loadTracks(true);
+        } finally {
+          lastReload = Date.now();
+          reloadGap = Math.max(4000, (lastReload - started) * 10);
+          reloading = false;
+        }
+      });
     }
   });
   await listen<ScanFinished>("scan-finished", (e) => {
