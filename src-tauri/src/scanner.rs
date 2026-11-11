@@ -14,6 +14,10 @@ use crate::{db, meta};
 
 /// Rows written per transaction.
 const BATCH: usize = 200;
+/// Longest the scanner waits for the next file with a transaction open. Slow
+/// files would otherwise keep the write lock for many seconds, past what the
+/// player waits to save a play.
+const BATCH_TIME: std::time::Duration = std::time::Duration::from_millis(250);
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -198,7 +202,22 @@ pub(crate) fn scan(db_path: &Path, progress: &dyn Fn(Progress)) -> Result<Finish
         let mut done = total - todo.len();
         let mut in_batch = 0;
         conn.execute_batch("BEGIN")?;
-        for (path, track) in rx {
+        loop {
+            let (path, track) = match rx.recv_timeout(BATCH_TIME) {
+                Ok(m) => m,
+                // Slow files: let go of the write lock while waiting.
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    if in_batch > 0 {
+                        conn.execute_batch("COMMIT; BEGIN")?;
+                        in_batch = 0;
+                    }
+                    match rx.recv() {
+                        Ok(m) => m,
+                        Err(_) => break,
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            };
             let w = std::time::Instant::now();
             match track {
                 Ok(t) => {

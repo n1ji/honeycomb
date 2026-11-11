@@ -1075,9 +1075,12 @@ impl<R: Runtime> Engine<R> {
 
     fn record_play(&self, track_id: i64) {
         let when = now_secs();
-        if let Ok(conn) = db::open(&self.db_path) {
-            let _ = db::record_play(&conn, track_id, when);
-            let _ = crate::mirror::note_play(&conn, track_id, when);
+        match db::open(&self.db_path).and_then(|conn| {
+            db::record_play(&conn, track_id, when)?;
+            crate::mirror::note_play(&conn, track_id, when)
+        }) {
+            Ok(()) => {}
+            Err(e) => eprintln!("player: couldn't save a play of track {track_id}: {e}"),
         }
         let _ = self.app.emit(
             "track-played",
