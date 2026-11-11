@@ -702,6 +702,27 @@ fn player_remove(state: State<AppState>, indices: Vec<usize>) {
 // ---------- artwork protocol ----------
 
 /// A track's cover: from its file, or for a server song, from the server.
+/// Open and upgrade the library. On failure, say so in a dialog before the
+/// app exits, instead of quitting with no word.
+fn open_library(path: &Path) -> anyhow::Result<Connection> {
+    let opened = db::open(path).and_then(|c| {
+        db::migrate(&c)?;
+        mirror::migrate(&c)?;
+        Ok(c)
+    });
+    if let Err(e) = &opened {
+        rfd::MessageDialog::new()
+            .set_level(rfd::MessageLevel::Error)
+            .set_title("Honeycomb can't open your library")
+            .set_description(format!(
+                "{e:#}\n\nThe library is {}. If an update was upgrading it, a copy from before (library.db.v<number>.bak) is in the same folder.",
+                path.display()
+            ))
+            .show();
+    }
+    opened
+}
+
 fn track_art(conn: &Connection, track_id: i64) -> CmdResult<Option<(Vec<u8>, String)>> {
     let path = db::track_by_id(conn, track_id).map_err(err)?.ok_or("track not found")?.path;
     if mirror::is_remote(&path) {
@@ -792,9 +813,7 @@ pub fn run() {
             } else {
                 app.path().resource_dir().ok().map(|d| d.join("plugins"))
             };
-            let conn = db::open(&db_path)?;
-            db::migrate(&conn)?;
-            mirror::migrate(&conn)?;
+            let conn = open_library(&db_path)?;
             mirror::init(&db_path, &dir);
             kaseki::set_opener(mirror::resolve);
             let test_library = std::env::var_os("HONEYCOMB_DATA_DIR").is_some() || smoke::folder().is_some();

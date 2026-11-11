@@ -1862,6 +1862,7 @@ dependencies = [
  "mp3lame-encoder",
  "plist",
  "rand",
+ "rfd",
  "rtrb",
  "rubato",
  "rusqlite",

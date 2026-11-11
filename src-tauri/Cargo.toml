@@ -32,6 +32,8 @@ symphonia = { version = "0.5", features = ["all-formats", "all-codecs"] }
 rubato = "0.16"
 rtrb = "0.3"
 rusqlite = { version = "0.32", features = ["bundled"] }
+# Already used by the dialog plugin; here for the one message shown before the window exists.
+rfd = { version = "0.16", default-features = false }
 walkdir = "2"
 rand = "0.8"
 plist = "1"

@@ -87,6 +87,9 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_listens_track ON listens(track_id);",
     )?;
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if version < SCHEMA_VERSION {
+        backup_before_upgrade(conn, version)?;
+    }
     if version < 1 {
         // v1: ratings move from 0-5 stars to 0-10 half-stars; tracks can be loved.
         conn.execute_batch(
@@ -137,6 +140,22 @@ pub fn migrate(conn: &Connection) -> Result<()> {
              PRAGMA user_version = 6;
              COMMIT;",
         )?;
+    }
+    Ok(())
+}
+
+/// The `user_version` the steps in `migrate` end at.
+const SCHEMA_VERSION: i64 = 6;
+
+/// Copy an existing library to `library.db.v<N>.bak` before upgrading it, so
+/// a failed or unwanted upgrade can be undone. VACUUM INTO writes a
+/// consistent copy, WAL included.
+fn backup_before_upgrade(conn: &Connection, version: i64) -> Result<()> {
+    let Some(path) = conn.path().filter(|p| !p.is_empty()) else { return Ok(()) };
+    let has_tracks: bool = conn.query_row("SELECT EXISTS (SELECT 1 FROM tracks)", [], |r| r.get(0))?;
+    let backup = format!("{path}.v{version}.bak");
+    if (version > 0 || has_tracks) && !Path::new(&backup).exists() {
+        conn.execute("VACUUM INTO ?1", [&backup])?;
     }
     Ok(())
 }
@@ -441,6 +460,24 @@ mod tests {
         assert_eq!(listen_count(&conn).unwrap(), 2);
         clear_listens(&conn).unwrap();
         assert_eq!(listen_count(&conn).unwrap(), 0);
+    }
+
+    #[test]
+    fn upgrades_back_up_the_library_first() {
+        let dir = std::env::temp_dir().join(format!("hc-dbbackup-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("library.db");
+        let conn = open(&path).unwrap();
+        migrate(&conn).unwrap();
+        assert_eq!(std::fs::read_dir(&dir).unwrap().filter(|e| e.as_ref().unwrap().path().extension().is_some_and(|x| x == "bak")).count(), 0, "a new library has nothing to back up");
+        conn.execute_batch("INSERT INTO tracks (path, date_added) VALUES ('/m/a.flac', 0); PRAGMA user_version = 5;").unwrap();
+        conn.execute_batch("ALTER TABLE tracks DROP COLUMN rg_track_gain; ALTER TABLE tracks DROP COLUMN rg_track_peak; ALTER TABLE tracks DROP COLUMN rg_album_gain; ALTER TABLE tracks DROP COLUMN rg_album_peak;").unwrap();
+        migrate(&conn).unwrap();
+        let backup = Connection::open(dir.join("library.db.v5.bak")).unwrap();
+        let (n, v): (i64, i64) = backup.query_row("SELECT (SELECT COUNT(*) FROM tracks), (SELECT user_version FROM pragma_user_version)", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!((n, v), (1, 5));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
