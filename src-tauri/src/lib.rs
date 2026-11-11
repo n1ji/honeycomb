@@ -66,7 +66,8 @@ impl AppState {
 
 // ---------- library ----------
 
-#[tauri::command]
+// Off the main thread, which also draws the window.
+#[tauri::command(async)]
 fn get_tracks(state: State<AppState>) -> CmdResult<TrackTable> {
     let t = std::time::Instant::now();
     let tracks = db::all_tracks(&state.conn()).map_err(err)?;
@@ -203,7 +204,7 @@ fn clear_listens(state: State<AppState>) -> CmdResult<()> {
     db::clear_listens(&state.conn()).map_err(err)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn edit_tags(state: State<AppState>, ids: Vec<i64>, edit: TagEdit) -> CmdResult<Vec<Track>> {
     let tracks = db::tracks_by_ids(&state.conn(), &ids).map_err(err)?;
     let mut updated = Vec::new();
@@ -339,7 +340,7 @@ fn add_to_playlist(state: State<AppState>, id: i64, track_ids: Vec<i64>) -> CmdR
     mirror::queue_playlist(&conn, id).map_err(err)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn export_m3u(state: State<AppState>, id: i64, path: String) -> CmdResult<()> {
     let conn = state.conn();
     let ids = resolve_playlist(&conn, id)?;
@@ -359,7 +360,7 @@ fn export_m3u(state: State<AppState>, id: i64, path: String) -> CmdResult<()> {
 
 /// Import an .m3u/.m3u8 as a new manual playlist. Entries that aren't in the
 /// library yet are read and added.
-#[tauri::command]
+#[tauri::command(async)]
 fn import_m3u(state: State<AppState>, path: String) -> CmdResult<Playlist> {
     let bytes = std::fs::read(&path).map_err(err)?;
     let text = String::from_utf8_lossy(&bytes);
@@ -483,7 +484,7 @@ struct SyncTarget {
     synced_files: usize,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn sync_target(dest: String) -> SyncTarget {
     let dest = Path::new(&dest);
     let synced_files = std::fs::read(dest.join(sync::MANIFEST))
@@ -560,14 +561,14 @@ async fn plugin_oauth_redirect(app: AppHandle, plugin: String, port: u16, path: 
         .map_err(err)?
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn plugin_secret_get(app: AppHandle, plugin: String, key: String) -> CmdResult<Option<String>> {
     plugin_manifest(&app, &plugin)?;
     Ok(plugins::secret_get(&app.state::<AppState>().conn(), &plugin, &key))
 }
 
 /// A null value deletes the secret.
-#[tauri::command]
+#[tauri::command(async)]
 fn plugin_secret_set(app: AppHandle, plugin: String, key: String, value: Option<String>) -> CmdResult<()> {
     plugin_manifest(&app, &plugin)?;
     plugins::secret_set(&app.state::<AppState>().conn(), &plugin, &key, value.as_deref())
