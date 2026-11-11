@@ -243,9 +243,16 @@ fn load_manifest(dest: &Path) -> Manifest {
 }
 
 fn save_manifest(dest: &Path, m: &Manifest) -> Result<()> {
-    let tmp = dest.join(format!("{MANIFEST}.part"));
-    fs::write(&tmp, serde_json::to_vec(m)?)?;
-    fs::rename(&tmp, dest.join(MANIFEST))?;
+    write_replacing(&dest.join(MANIFEST), &serde_json::to_vec(m)?)
+}
+
+/// Write `path` through a fresh `.part` file and a rename, so a link planted
+/// at either name on the device is replaced, never written through.
+fn write_replacing(path: &Path, data: &[u8]) -> Result<()> {
+    let part = path.with_file_name(format!("{}.part", path.file_name().unwrap_or_default().to_string_lossy()));
+    let _ = fs::remove_file(&part);
+    fs::OpenOptions::new().write(true).create_new(true).open(&part)?.write_all(data)?;
+    fs::rename(&part, path)?;
     Ok(())
 }
 
@@ -447,7 +454,7 @@ fn write_playlist(dest: &Path, name: &str, tracks: &[(&Track, &str)]) -> Result<
     for (t, path) in tracks {
         out.push_str(&format!("#EXTINF:{},{} - {}\n{}\n", t.duration.round() as i64, t.artist, t.title, path));
     }
-    fs::write(dest.join(&rel), out)?;
+    write_replacing(&dest.join(&rel), out.as_bytes())?;
     Ok(rel)
 }
 
@@ -990,6 +997,28 @@ mod tests {
         assert!(r.failed.is_empty(), "{r:?}");
         assert_eq!(fs::read(&precious).unwrap(), b"keep me");
         assert_eq!(fs::read(stick.join("Artist/Album/01 One.mp3")).unwrap().len(), 1000);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn manifest_and_playlists_replace_links_instead_of_following_them() {
+        let (root, conn, _) = setup("planted-links");
+        let stick = root.join("stick");
+        fs::create_dir_all(&stick).unwrap();
+        let precious = root.join("precious.txt");
+        fs::write(&precious, b"keep me").unwrap();
+        std::os::unix::fs::symlink(&precious, stick.join(MANIFEST)).unwrap();
+        std::os::unix::fs::symlink(&precious, stick.join(format!("{MANIFEST}.part"))).unwrap();
+        let p = Profile { dest: stick.to_string_lossy().into(), whole_library: true, ..Default::default() };
+        let r = sync(&conn, &p);
+        assert!(r.failed.is_empty(), "{r:?}");
+        assert_eq!(fs::read(&precious).unwrap(), b"keep me");
+        assert!(!fs::symlink_metadata(stick.join(MANIFEST)).unwrap().is_symlink());
+
+        std::os::unix::fs::symlink(&precious, stick.join("Mix.m3u8")).unwrap();
+        write_playlist(&stick, "Mix", &[]).unwrap();
+        assert_eq!(fs::read(&precious).unwrap(), b"keep me");
         let _ = fs::remove_dir_all(&root);
     }
 
