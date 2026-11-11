@@ -56,7 +56,8 @@ async function main() {
     store.signal = e.payload;
     store.emit("signal");
   });
-  await listen<QueueState>("player-queue", (e) => {
+  // trackIds is left out when the queue itself didn't change (volume, pause…).
+  await listen<Omit<QueueState, "trackIds"> & { trackIds?: number[] }>("player-queue", (e) => {
     const prevError = store.queue.error;
     store.setQueue(e.payload);
     if (e.payload.error && e.payload.error !== prevError) toast(e.payload.error, true);

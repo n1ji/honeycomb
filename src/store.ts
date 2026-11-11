@@ -241,11 +241,12 @@ class Store {
 
   // ---------- player ----------
 
-  setQueue(q: QueueState) {
-    this.queue = q;
+  setQueue(q: Omit<QueueState, "trackIds"> & { trackIds?: number[] }) {
+    const listChanged = q.trackIds !== undefined;
+    this.queue = { ...q, trackIds: q.trackIds ?? this.queue.trackIds };
     this.emit("queue");
-    if (this.view.kind === "queue") {
-      this.viewIds = q.trackIds;
+    if (listChanged && this.view.kind === "queue") {
+      this.viewIds = this.queue.trackIds;
       this.viewVersion++;
       this.recompute("keepAll");
     }

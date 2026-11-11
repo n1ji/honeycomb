@@ -163,7 +163,9 @@ struct OutputInfo {
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct QueueEvent {
-    track_ids: Vec<i64>,
+    /// Left out when the list is the same as last time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    track_ids: Option<Vec<i64>>,
     current: Option<usize>,
     shuffle: bool,
     repeat: Repeat,
@@ -230,6 +232,8 @@ struct Engine<R: Runtime> {
     idle_since: Option<Instant>,
     /// Last plan sent to the decoder: (epoch, base segment, uids).
     sent_plan: Option<(u64, u32, Vec<u64>)>,
+    /// The track ids last sent with `player-queue`.
+    sent_ids: Vec<i64>,
     queue: Vec<QItem>,
     /// Queue order before shuffling, restored when shuffle is turned off.
     unshuffled: Option<Vec<QItem>>,
@@ -276,6 +280,7 @@ impl<R: Runtime> Engine<R> {
             suspended: None,
             idle_since: None,
             sent_plan: None,
+            sent_ids: Vec::new(),
             queue: Vec::new(),
             unshuffled: None,
             current: None,
@@ -498,7 +503,8 @@ impl<R: Runtime> Engine<R> {
                 self.unshuffled = None;
                 self.stop();
             }
-            Cmd::Emit => {}
+            // The window asking for everything, e.g. after a reload.
+            Cmd::Emit => self.sent_ids.clear(),
         }
         self.fix_preload();
         self.emit_queue();
@@ -1093,11 +1099,16 @@ impl<R: Runtime> Engine<R> {
         self.last_tick = Some(tick);
     }
 
-    fn emit_queue(&self) {
+    fn emit_queue(&mut self) {
+        let same = self.sent_ids.len() == self.queue.len() && self.sent_ids.iter().zip(&self.queue).all(|(a, q)| *a == q.track_id);
+        let track_ids = (!same).then(|| {
+            self.sent_ids = self.queue.iter().map(|q| q.track_id).collect();
+            self.sent_ids.clone()
+        });
         let _ = self.app.emit(
             "player-queue",
             QueueEvent {
-                track_ids: self.queue.iter().map(|q| q.track_id).collect(),
+                track_ids,
                 current: self.current,
                 shuffle: self.unshuffled.is_some(),
                 repeat: self.repeat,
@@ -1236,6 +1247,25 @@ mod tests {
 
     fn item(id: i64, path: &std::path::Path, duration: f64) -> QItem {
         QItem { uid: 0, track_id: id, path: path.to_string_lossy().into_owned(), duration, rg: ReplayGain::default() }
+    }
+
+    /// The queue's ids go out only when the list changes, or when the window
+    /// asks for everything.
+    #[test]
+    fn queue_ids_are_sent_only_when_they_change() {
+        let dir = std::env::temp_dir().join(format!("hc-queueids-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let rig = Rig::new(&dir);
+        let has_ids = |what: &str| rig.wait("player-queue", 2.0, what, |_| true).get("trackIds").is_some();
+        rig.send(Cmd::Enqueue(vec![item(1, &dir.join("a.flac"), 60.0), item(2, &dir.join("b.flac"), 60.0)], false));
+        rig.wait("player-queue", 2.0, "the new queue", |q| q["trackIds"] == serde_json::json!([1, 2]));
+        let sent = rig.count("player-queue");
+        rig.send(Cmd::Volume(0.5));
+        rig.wait("player-queue", 2.0, "the volume change", |q| q["volume"] == 0.5);
+        assert_eq!(rig.count("player-queue"), sent + 1);
+        assert!(!has_ids("volume"), "a volume change doesn't resend the list");
+        rig.send(Cmd::Emit);
+        rig.wait("player-queue", 2.0, "the full state", |q| q.get("trackIds").is_some());
     }
 
     /// With the drive gone, playback stops after a few missing songs instead
