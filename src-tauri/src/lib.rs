@@ -341,10 +341,12 @@ fn add_to_playlist(state: State<AppState>, id: i64, track_ids: Vec<i64>) -> CmdR
 }
 
 #[tauri::command(async)]
-fn export_m3u(state: State<AppState>, id: i64, path: String) -> CmdResult<()> {
-    let conn = state.conn();
-    let ids = resolve_playlist(&conn, id)?;
-    let tracks = db::tracks_by_ids(&conn, &ids).map_err(err)?;
+fn export_m3u(app: AppHandle, state: State<AppState>, id: i64, name: String) -> CmdResult<bool> {
+    let tracks = {
+        let conn = state.conn();
+        let ids = resolve_playlist(&conn, id)?;
+        db::tracks_by_ids(&conn, &ids).map_err(err)?
+    };
     let mut out = String::from("#EXTM3U\n");
     for t in tracks {
         out.push_str(&format!(
@@ -355,7 +357,7 @@ fn export_m3u(state: State<AppState>, id: i64, path: String) -> CmdResult<()> {
             t.path
         ));
     }
-    std::fs::write(&path, out).map_err(err)
+    save_as(&app, &name, "Playlist", &["m3u8", "m3u"], out.as_bytes())
 }
 
 /// Import an .m3u/.m3u8 as a new manual playlist. Entries that aren't in the
@@ -432,9 +434,9 @@ async fn import_apply(
     importer::apply(&mut state.conn(), &src, import_stats && xml_path.is_some(), &playlists).map_err(err)
 }
 
-#[tauri::command]
-fn save_text(path: String, text: String) -> CmdResult<()> {
-    std::fs::write(path, text).map_err(err)
+#[tauri::command(async)]
+fn save_text(app: AppHandle, name: String, text: String) -> CmdResult<bool> {
+    save_as(&app, &name, "Text", &["txt"], text.as_bytes())
 }
 
 // ---------- artwork ----------
@@ -445,11 +447,25 @@ async fn artwork_ext(state: State<'_, AppState>, track_id: i64) -> CmdResult<Opt
     Ok(track_art(&state.conn(), track_id)?.map(|(_, mime)| mime.rsplit('/').next().unwrap_or("jpg").replace("jpeg", "jpg")))
 }
 
-/// Save a track's cover, as stored (no re-encoding), to `dest`.
-#[tauri::command]
-async fn save_artwork(state: State<'_, AppState>, track_id: i64, dest: String) -> CmdResult<()> {
-    let (data, _) = track_art(&state.conn(), track_id)?.ok_or("this track has no artwork")?;
-    std::fs::write(dest, data).map_err(err)
+/// Save a track's cover, as stored (no re-encoding).
+#[tauri::command(async)]
+fn save_artwork(app: AppHandle, state: State<AppState>, track_id: i64, name: String) -> CmdResult<bool> {
+    let (data, mime) = track_art(&state.conn(), track_id)?.ok_or("this track has no artwork")?;
+    let ext = mime.rsplit('/').next().unwrap_or("jpg").replace("jpeg", "jpg");
+    save_as(&app, &name, "Image", &[&ext], &data)
+}
+
+/// Writes only where the user chose in a save dialog opened from here, so
+/// nothing in the webview (plugins included) can pick a path to overwrite.
+/// False when the dialog was cancelled.
+fn save_as(app: &AppHandle, name: &str, kind: &str, exts: &[&str], data: &[u8]) -> CmdResult<bool> {
+    use tauri_plugin_dialog::DialogExt;
+    let Some(path) = app.dialog().file().set_file_name(name).add_filter(kind, exts).blocking_save_file() else {
+        return Ok(false);
+    };
+    let path = path.into_path().map_err(err)?;
+    std::fs::write(path, data).map_err(err)?;
+    Ok(true)
 }
 
 // ---------- lyrics ----------

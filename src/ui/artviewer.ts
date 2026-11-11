@@ -1,4 +1,3 @@
-import { save } from "@tauri-apps/plugin-dialog";
 import { api, artUrl, Track } from "../api";
 import { h, toast } from "../util";
 import { run } from "./actions";
@@ -14,10 +13,7 @@ export function openArtViewer(t: Track) {
     run(async () => {
       const ext = (await api.artworkExt(t.id)) ?? "jpg";
       const base = [t.albumArtist || t.artist, t.album || t.title].filter(Boolean).join(" - ").replace(unsafeName, " ").trim();
-      const dest = await save({ defaultPath: `${base || "cover"}.${ext}`, filters: [{ name: "Image", extensions: [ext] }] });
-      if (!dest) return;
-      await api.saveArtwork(t.id, dest);
-      toast("Artwork saved");
+      if (await api.saveArtwork(t.id, `${base || "cover"}.${ext}`)) toast("Artwork saved");
     }),
   );
   const box = h(

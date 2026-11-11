@@ -1,4 +1,4 @@
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { open } from "@tauri-apps/plugin-dialog";
 import { api, ImportPreview } from "../api";
 import { store } from "../store";
 import { h, toast } from "../util";
@@ -156,8 +156,7 @@ export function openImporter() {
 
     const saveReport = () =>
       run(async () => {
-        const path = await save({ defaultPath: "import report.txt", filters: [{ name: "Text", extensions: ["txt"] }] });
-        if (path) await api.saveText(path, p.report);
+        await api.saveText("import report.txt", p.report);
       });
     const doImport = () =>
       run(async () => {

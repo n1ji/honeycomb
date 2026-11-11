@@ -1,4 +1,4 @@
-import { ask, open, save } from "@tauri-apps/plugin-dialog";
+import { ask, open } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { api, Playlist } from "../api";
 import { store } from "../store";
@@ -240,10 +240,7 @@ export function openPlaylistMenu(x: number, y: number, p: Playlist) {
       label: "Export as M3U…",
       action: () =>
         run(async () => {
-          const path = await save({ defaultPath: `${p.name}.m3u8`, filters: [{ name: "Playlist", extensions: ["m3u8", "m3u"] }] });
-          if (!path) return;
-          await api.exportM3u(p.id, path);
-          toast(`Exported ${p.name}`);
+          if (await api.exportM3u(p.id, `${p.name}.m3u8`)) toast(`Exported ${p.name}`);
         }),
     },
     SEP,

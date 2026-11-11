@@ -281,15 +281,15 @@ export const api = {
   previewSmart: (rules: SmartRules) => invoke<number>("preview_smart", { rules }),
   setPlaylistTracks: (id: number, trackIds: number[]) => invoke<void>("set_playlist_tracks", { id, trackIds }),
   addToPlaylist: (id: number, trackIds: number[]) => invoke<void>("add_to_playlist", { id, trackIds }),
-  exportM3u: (id: number, path: string) => invoke<void>("export_m3u", { id, path }),
+  exportM3u: (id: number, name: string) => invoke<boolean>("export_m3u", { id, name }),
   importM3u: (path: string) => invoke<Playlist>("import_m3u", { path }),
   importPreview: (xmlPath: string | null, m3uPaths: string[]) =>
     invoke<ImportPreview>("import_preview", { xmlPath, m3uPaths }),
   importApply: (xmlPath: string | null, m3uPaths: string[], importStats: boolean, playlists: number[]) =>
     invoke<ImportOutcome>("import_apply", { xmlPath, m3uPaths, importStats, playlists }),
-  saveText: (path: string, text: string) => invoke<void>("save_text", { path, text }),
+  saveText: (name: string, text: string) => invoke<boolean>("save_text", { name, text }),
   artworkExt: (trackId: number) => invoke<string | null>("artwork_ext", { trackId }),
-  saveArtwork: (trackId: number, dest: string) => invoke<void>("save_artwork", { trackId, dest }),
+  saveArtwork: (trackId: number, name: string) => invoke<boolean>("save_artwork", { trackId, name }),
   lyrics: (trackId: number) => invoke<Lyrics>("get_lyrics", { trackId }),
   syncTarget: (dest: string) => invoke<SyncTarget>("sync_target", { dest }),
   syncRun: (profile: SyncProfile) => invoke<SyncReport>("sync_run", { profile }),
