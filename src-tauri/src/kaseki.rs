@@ -106,6 +106,8 @@ pub struct Marker {
     pub at: u64,
     /// Position in the track at `at`, in seconds.
     pub start: f64,
+    /// The track before this one stopped early on a read error.
+    pub cut: bool,
 }
 
 pub type Markers = Arc<Mutex<Vec<Marker>>>;
@@ -468,6 +470,8 @@ pub struct Source {
     /// A buffer decoded early (to learn the sample rate), returned first.
     first: Option<(Vec<f32>, usize, u32)>,
     sbuf: Option<(SampleBuffer<f32>, SignalSpec)>,
+    /// Stopped on a read error rather than at the end of the file.
+    pub(crate) cut: bool,
 }
 
 /// Decoded audio: interleaved samples, channel count, sample rate.
@@ -512,6 +516,7 @@ impl Source {
             skip_to: None,
             first: None,
             sbuf: None,
+            cut: false,
         };
         if src.rate == 0 {
             let first = src.decode_next().ok_or("no audio")?;
@@ -559,7 +564,12 @@ impl Source {
                 Ok(p) => p,
                 // A chained stream starts here (see `follow_chain`).
                 Err(SymError::ResetRequired) if self.follow_chain() => continue,
-                Err(_) => return None, // end of stream, or unreadable from here on
+                Err(SymError::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => return None,
+                Err(e) => {
+                    eprintln!("kaseki: read error: {e}");
+                    self.cut = true;
+                    return None;
+                }
             };
             if packet.track_id() != self.track_id && !self.follow_chain() {
                 continue;
@@ -567,7 +577,10 @@ impl Source {
             let decoded = match self.decoder.decode(&packet) {
                 Ok(d) => d,
                 Err(SymError::DecodeError(_)) => continue, // a corrupt packet; skip it
-                Err(_) => return None,
+                Err(_) => {
+                    self.cut = true;
+                    return None;
+                }
             };
             let spec = *decoded.spec();
             self.layout = spec.channels;
@@ -971,7 +984,7 @@ impl Dec {
                     if catch_unwind(AssertUnwindSafe(|| self.step())).is_err() {
                         eprintln!("kaseki: decoder crashed; ending the track");
                         self.cur = None;
-                        self.end();
+                        self.end(true);
                     }
                 }
             }
@@ -1009,14 +1022,14 @@ impl Dec {
                 self.plan = (0, Vec::new());
                 let Some(at) = self.out.as_ref().map(|o| o.written) else { return };
                 let start = catch_unwind(AssertUnwindSafe(|| source.seek(pos))).unwrap_or(Some(0.0));
-                self.mark(Marker { epoch, seq: 0, uid: Some(uid), at, start: start.unwrap_or(pos) });
+                self.mark(Marker { epoch, seq: 0, uid: Some(uid), at, start: start.unwrap_or(pos), cut: false });
                 match start {
                     Some(_) => {
                         self.cur = Some(Playing { source, seq: 0, gain });
                         self.filling = true;
                     }
                     // Past the end: the track is over.
-                    None => self.end(),
+                    None => self.end(false),
                 }
             }
             DecMsg::Plan { epoch, base, items } => {
@@ -1129,6 +1142,7 @@ impl Dec {
     /// track if its format matches, otherwise mark the end.
     fn track_ended(&mut self) {
         let Some(done) = self.cur.take() else { return };
+        let cut = done.source.cut;
         let (base, items) = &self.plan;
         let next = done
             .seq
@@ -1143,25 +1157,25 @@ impl Dec {
                     let seq = done.seq + 1;
                     let at = chain.at();
                     self.cur = Some(Playing { source: Box::new(source), seq, gain });
-                    self.mark(Marker { epoch: self.epoch, seq, uid: Some(uid), at, start: 0.0 });
+                    self.mark(Marker { epoch: self.epoch, seq, uid: Some(uid), at, start: 0.0, cut });
                     return;
                 }
                 Ok(Err(e)) => eprintln!("kaseki: {e}"),
                 _ => {}
             }
         }
-        self.end();
+        self.end(cut);
     }
 
     /// Nothing more to decode: flush the resampler and mark the end.
-    fn end(&mut self) {
+    fn end(&mut self, cut: bool) {
         let at = match &self.chain {
             Some(c) => c.at(),
             None => self.next_at(),
         };
         self.finish_chain();
         let seq = self.last_seq + 1;
-        self.mark(Marker { epoch: self.epoch, seq, uid: None, at, start: 0.0 });
+        self.mark(Marker { epoch: self.epoch, seq, uid: None, at, start: 0.0, cut });
     }
 }
 
@@ -1286,7 +1300,7 @@ pub(crate) mod tests {
         for (i, f) in rig.got.chunks_exact(2).enumerate() {
             assert_eq!(to_i16(f[0]), ramp(i as u32), "frame {i}");
         }
-        assert_eq!(rig.seen[0], Marker { epoch: 1, seq: 0, uid: Some(7), at: 0, start: 0.0 });
+        assert_eq!(rig.seen[0], Marker { epoch: 1, seq: 0, uid: Some(7), at: 0, start: 0.0, cut: false });
         assert_eq!(rig.seen[1].at, 44100 * 2);
     }
 
@@ -1747,9 +1761,11 @@ pub(crate) mod tests {
                     let n = s.read(&mut req).unwrap_or(0);
                     let line = String::from_utf8_lossy(&req[..n]).to_string();
                     let name = line.split_whitespace().nth(1).unwrap_or("/").trim_start_matches('/').to_string();
-                    let body = std::fs::read(dir.join(name)).unwrap_or_default();
+                    let body = std::fs::read(dir.join(&name)).unwrap_or_default();
                     let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Type: audio/wav\r\nContent-Length: {}\r\n\r\n", body.len());
-                    for piece in body.chunks(4096) {
+                    // "cut…" files drop the connection halfway, like a server going away.
+                    let sent = if name.starts_with("cut") { body.len() / 2 } else { body.len() };
+                    for piece in body[..sent].chunks(4096) {
                         let _ = s.write_all(piece);
                         std::thread::sleep(Duration::from_millis(2));
                     }
@@ -1787,6 +1803,25 @@ pub(crate) mod tests {
         assert_eq!(rig.got.len(), 51000 * 2);
         for (i, f) in rig.got.chunks_exact(2).enumerate() {
             assert_eq!(to_i16(f[0]), ramp(i as u32), "frame {i}");
+        }
+    }
+
+    /// A stream that breaks off is marked cut, so the player doesn't count it
+    /// as played; one that ends normally isn't.
+    #[test]
+    fn a_broken_stream_is_marked_cut() {
+        let dir = tmp("cutstream");
+        std::fs::create_dir_all(&dir).unwrap();
+        write_wav(&dir.join("cut.wav"), 44100, 40000, |i| ramp(i));
+        write_wav(&dir.join("whole.wav"), 44100, 20000, |i| ramp(i));
+        let url = slow_server(dir);
+        set_opener(stream_opener);
+        for (name, cut) in [("cut.wav", true), ("whole.wav", false)] {
+            let mut rig = Rig::new(44100, 4096);
+            let source = Box::new(Source::open(&format!("teststream:{url}/{name}")).unwrap());
+            rig.dec.handle(DecMsg::Start { epoch: 1, uid: 1, source, pos: 0.0, gain: 1.0 });
+            rig.run_to_end(1);
+            assert_eq!(rig.seen.back().map(|m| m.cut), Some(cut), "{name}");
         }
     }
 }

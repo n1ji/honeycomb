@@ -27,6 +27,8 @@ const TICK: Duration = Duration::from_millis(200);
 const DEVICE_CHECK: Duration = Duration::from_secs(2);
 /// Close the output after this long paused or stopped, so the device can sleep.
 const IDLE_CLOSE: Duration = Duration::from_secs(30);
+/// Unplayable songs skipped in a row before playback stops.
+const MAX_SKIPS: usize = 5;
 /// How many tracks ahead the decoder is told about.
 const PLAN_LEN: usize = 4;
 
@@ -527,13 +529,15 @@ impl<R: Runtime> Engine<R> {
     }
 
     /// Start queue[index] at `pos` seconds, optionally paused. Unplayable
-    /// files are skipped, giving up after one pass over the queue.
+    /// files are skipped, giving up after a few in a row (a drive that isn't
+    /// plugged in would otherwise fail on every song in the queue).
     fn restart_at(&mut self, index: usize, pos: f64, paused: bool) {
         if index >= self.queue.len() {
             return;
         }
         let mut i = index;
-        for _ in 0..self.queue.len() {
+        let mut skipped = 0;
+        while skipped < self.queue.len().min(MAX_SKIPS) {
             let pos = if i == index { pos.max(0.0) } else { 0.0 };
             match Source::open(&self.queue[i].path) {
                 Ok(source) => {
@@ -566,7 +570,12 @@ impl<R: Runtime> Engine<R> {
                     return;
                 }
                 Err(e) => {
-                    let _ = self.app.emit("player-error", &e);
+                    skipped += 1;
+                    if skipped == 1 {
+                        let _ = self.app.emit("player-error", &e);
+                    } else {
+                        eprintln!("player: {e}");
+                    }
                     self.error = Some(e);
                 }
             }
@@ -577,6 +586,9 @@ impl<R: Runtime> Engine<R> {
                 }
                 i = 0;
             }
+        }
+        if skipped == MAX_SKIPS && self.queue.len() > MAX_SKIPS {
+            let _ = self.app.emit("player-error", format!("Stopped after {MAX_SKIPS} songs in a row couldn't be opened"));
         }
         self.halt();
         self.current = None;
@@ -674,18 +686,21 @@ impl<R: Runtime> Engine<R> {
         let consumed = out.shared.consumed();
         let mut finished = Vec::new();
         while self.segs.len() >= 2 && consumed >= self.segs[1].at {
+            let cut = self.segs[1].cut;
             if let Some(uid) = self.segs.pop_front().and_then(|m| m.uid) {
-                finished.push(uid);
+                finished.push((uid, cut));
             }
         }
         if finished.is_empty() {
             return;
         }
-        for uid in &finished {
+        // A track that broke off on a read error wasn't heard to the end.
+        for (uid, _) in finished.iter().filter(|(_, cut)| !cut) {
             if let Some(q) = self.queue.iter().find(|q| q.uid == *uid) {
                 self.record_play(q.track_id);
             }
         }
+        let finished: Vec<u64> = finished.into_iter().map(|(uid, _)| uid).collect();
         match self.segs.front().map(|m| m.uid) {
             Some(Some(uid)) => self.current = self.queue.iter().position(|q| q.uid == uid),
             _ => {
@@ -1177,7 +1192,7 @@ mod tests {
         fn new(dir: &std::path::Path) -> Rig {
             let app = tauri::test::mock_app();
             let log: Log = Default::default();
-            for name in ["player-tick", "player-queue", "track-played"] {
+            for name in ["player-tick", "player-queue", "track-played", "player-error"] {
                 let log = log.clone();
                 app.listen_any(name, move |e| {
                     let v = serde_json::from_str(e.payload()).unwrap_or_default();
@@ -1221,6 +1236,21 @@ mod tests {
 
     fn item(id: i64, path: &std::path::Path, duration: f64) -> QItem {
         QItem { uid: 0, track_id: id, path: path.to_string_lossy().into_owned(), duration, rg: ReplayGain::default() }
+    }
+
+    /// With the drive gone, playback stops after a few missing songs instead
+    /// of trying (and reporting) every one in the queue.
+    #[test]
+    fn missing_files_stop_playback_after_a_few() {
+        let dir = std::env::temp_dir().join(format!("hc-missing-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let rig = Rig::new(&dir);
+        let gone = dir.join("unplugged");
+        let items = (1..=12).map(|i| item(i, &gone.join(format!("{i}.flac")), 60.0)).collect();
+        rig.send(Cmd::Load(items, 0));
+        rig.wait("player-error", 3.0, "giving up", |e| e.as_str().is_some_and(|m| m.starts_with("Stopped after")));
+        assert_eq!(rig.count("player-error"), 2, "the first failure, then one about stopping");
+        assert!(rig.last("player-queue").is_some_and(|q| q["current"].is_null()));
     }
 
     #[test]
