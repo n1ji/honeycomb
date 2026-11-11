@@ -1,4 +1,4 @@
-import { api, Playlist, QueueState, RemoteState, Signal, Tick, Track } from "./api";
+import { api, Playlist, QueueState, RemoteState, Server, Signal, Tick, Track } from "./api";
 
 export type View = { kind: "library" } | { kind: "inbox" } | { kind: "queue" } | { kind: "playlist"; id: number };
 
@@ -18,12 +18,21 @@ export type GroupFilter = Partial<Record<keyof Filters, string>>;
 
 type Topic = "tracks" | "view" | "visible" | "selection" | "playlists" | "queue" | "tick" | "signal" | "settings";
 
+/** "local" for files on this computer, else the server's source id. */
+export function libraryOf(t: Track): string {
+  if (!t.path.startsWith(REMOTE)) return "local";
+  const rest = t.path.slice(REMOTE.length);
+  return rest.slice(0, rest.indexOf("/"));
+}
+const REMOTE = "subsonic://";
+
 class Store {
   tracks = new Map<number, Track>();
   playlists: Playlist[] = [];
   settings: Record<string, string> = {};
   /** Songs on a server, and whether they're kept on this computer. Empty without servers. */
   remote = new Map<number, RemoteState>();
+  servers: Server[] = [];
 
   view: View = { kind: "library" };
   /** Track ids that make up the current view, before browser filters and search. */
@@ -75,8 +84,9 @@ class Store {
   }
 
   async loadRemote() {
-    const { ids, states } = await api.remoteStates();
+    const [{ ids, states }, servers] = await Promise.all([api.remoteStates(), api.servers()]);
     this.remote = new Map(ids.map((id, i) => [id, states[i]]));
+    this.servers = servers;
     this.emit("tracks");
   }
 
@@ -99,11 +109,42 @@ class Store {
     await this.refreshView("keepScroll");
   }
 
-  /** Tracks in the library, not counting the Inbox. */
-  libraryCount(): number {
+  /** Tracks in the library, not counting the Inbox. `shownOnly` leaves out hidden libraries. */
+  libraryCount(shownOnly = false): number {
     let n = 0;
-    for (const t of this.tracks.values()) if (!t.inbox) n++;
+    for (const t of this.tracks.values()) if (!t.inbox && (!shownOnly || this.shown(t))) n++;
     return n;
+  }
+
+  // ---------- libraries ----------
+
+  /** False for songs of a library (this computer, or a server) the user hid. */
+  shown(t: Track): boolean {
+    const hidden = this.hiddenLibraries();
+    return !hidden.size || !hidden.has(libraryOf(t));
+  }
+
+  hiddenLibraries(): Set<string> {
+    const raw = this.settings.hiddenLibraries ?? "";
+    if (raw !== this.hiddenRaw) {
+      this.hiddenRaw = raw;
+      this.hidden = new Set(raw.split(",").filter(Boolean));
+    }
+    return this.hidden;
+  }
+  private hiddenRaw = "";
+  private hidden = new Set<string>();
+
+  async setLibraryShown(key: string, show: boolean) {
+    const next = new Set(this.hiddenLibraries());
+    if (show) next.delete(key);
+    else next.add(key);
+    const value = [...next].join(",");
+    this.settings.hiddenLibraries = value;
+    await api.setSetting("hiddenLibraries", value);
+    this.filters = { genre: null, artist: null, album: null };
+    this.emit("tracks");
+    await this.refreshView("keepScroll");
   }
 
   // ---------- view ----------
@@ -122,12 +163,15 @@ class Store {
     const v = this.view;
     if (v.kind === "library") {
       // Inbox tracks join the library once they're added.
-      this.viewIds = this.sortCache().libraryIds.filter((id) => !this.tracks.get(id)!.inbox);
+      this.viewIds = this.sortCache().libraryIds.filter((id) => {
+        const t = this.tracks.get(id)!;
+        return !t.inbox && this.shown(t);
+      });
     } else if (v.kind === "inbox") {
       // Newest first.
       const pos = this.sortCache().pos;
       this.viewIds = [...this.tracks.values()]
-        .filter((t) => t.inbox)
+        .filter((t) => t.inbox && this.shown(t))
         .sort((a, b) => b.dateAdded - a.dateAdded || pos.get(a.id)! - pos.get(b.id)!)
         .map((t) => t.id);
     } else if (v.kind === "queue") {

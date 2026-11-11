@@ -91,10 +91,41 @@ export function mountSidebar() {
 
   const renderLib = () => {
     const queueLen = store.queue.trackIds.length;
-    const inboxCount = [...store.tracks.values()].filter((t) => t.inbox).length;
+    const inboxCount = [...store.tracks.values()].filter((t) => t.inbox && store.shown(t)).length;
+    const hidden = store.hiddenLibraries();
+    const head = h("div", { class: "nav-head" }, h("span", {}, "Library"));
+    // Only worth offering once a server sits next to this computer's files.
+    if (store.servers.length || hidden.size) {
+      head.append(
+        h(
+          "span",
+          { class: "nav-actions" },
+          h(
+            "button",
+            {
+              class: `mini${hidden.size ? " on" : ""}`,
+              title: "Show or hide libraries",
+              onclick: (e: Event) => {
+                const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                const libs = [{ key: "local", name: "This computer" }, ...store.servers.map((s) => ({ key: String(s.id), name: s.name }))];
+                openMenu(
+                  r.left,
+                  r.bottom + 2,
+                  libs.map((l) => {
+                    const on = !hidden.has(l.key);
+                    return { label: `${on ? "✓" : "\u2003"} ${l.name}`, action: () => run(() => store.setLibraryShown(l.key, !on)) };
+                  }),
+                );
+              },
+            },
+            "⧉",
+          ),
+        ),
+      );
+    }
     libBlock.replaceChildren(
-      h("div", { class: "nav-head" }, h("span", {}, "Library")),
-      item("Music", { kind: "library" }, "♫", (el) => el.append(h("span", { class: "badge" }, store.libraryCount().toLocaleString()))),
+      head,
+      item("Music", { kind: "library" }, "♫", (el) => el.append(h("span", { class: "badge" }, store.libraryCount(true).toLocaleString()))),
       item("Inbox", { kind: "inbox" }, "✉", (el) => {
         if (inboxCount) el.append(h("span", { class: "badge new" }, inboxCount.toLocaleString()));
         el.addEventListener("contextmenu", (e) => {
@@ -158,7 +189,7 @@ export function mountSidebar() {
   const renderGroups = (m: Exclude<ListMode, "playlists">) => {
     const groups = new Map<string, { label: string; sub: string; filters: GroupFilter; count: number }>();
     for (const t of store.tracks.values()) {
-      if (t.inbox) continue;
+      if (t.inbox || !store.shown(t)) continue;
       const artist = artistOf(t);
       const [key, label, sub, filters]: [string, string, string, GroupFilter] =
         m === "artists"
@@ -193,6 +224,7 @@ export function mountSidebar() {
               const t = store.tracks.get(id)!;
               return (
                 !t.inbox &&
+                store.shown(t) &&
                 (f.artist === undefined || artistOf(t) === f.artist) &&
                 (f.album === undefined || t.album === f.album) &&
                 (f.genre === undefined || t.genre === f.genre)

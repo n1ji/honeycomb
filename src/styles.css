@@ -247,6 +247,10 @@ body {
   color: var(--text);
 }
 
+.mini.on {
+  color: var(--accent);
+}
+
 .nav-item {
   display: flex;
   align-items: center;
