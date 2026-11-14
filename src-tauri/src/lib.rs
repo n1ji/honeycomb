@@ -559,6 +559,21 @@ fn plugin_manifest(app: &AppHandle, plugin: &str) -> CmdResult<plugins::Manifest
     app.state::<AppState>().plugins.manifest(plugin).map_err(|e| format!("{plugin}: {e:#}"))
 }
 
+/// Starts serving an enabled plugin's files; returns the token for its `plugin://` URLs.
+#[tauri::command]
+fn plugin_start(app: AppHandle, plugin: String) -> CmdResult<String> {
+    plugin_manifest(&app, &plugin)?;
+    if !plugins::enabled_ids(&app.state::<AppState>().conn()).contains(&plugin) {
+        return Err(format!("{plugin} isn't turned on"));
+    }
+    Ok(plugins::start(&plugin))
+}
+
+#[tauri::command]
+fn plugin_stop(plugin: String) {
+    plugins::stop(&plugin);
+}
+
 #[tauri::command]
 async fn plugin_http(app: AppHandle, plugin: String, request: plugins::HttpRequest) -> CmdResult<plugins::HttpResponse> {
     let m = plugin_manifest(&app, &plugin)?;
@@ -796,9 +811,7 @@ pub fn run() {
             let app = ctx.app_handle().clone();
             let path = request.uri().path().to_string();
             std::thread::spawn(move || {
-                let state = app.state::<AppState>();
-                let enabled = plugins::enabled_ids(&state.conn());
-                responder.respond(plugins::serve(&state.plugins, &enabled, &path))
+                responder.respond(plugins::serve(&app.state::<AppState>().plugins, &path))
             });
         })
         .setup(|app| {
@@ -814,6 +827,9 @@ pub fn run() {
                 app.path().resource_dir().ok().map(|d| d.join("plugins"))
             };
             let conn = open_library(&db_path)?;
+            if smoke::folder().is_some() {
+                smoke::install_probes(&plugins_dir, &conn)?;
+            }
             mirror::init(&db_path, &dir);
             kaseki::set_opener(mirror::resolve);
             let test_library = std::env::var_os("HONEYCOMB_DATA_DIR").is_some() || smoke::folder().is_some();
@@ -875,6 +891,8 @@ pub fn run() {
             update_install,
             plugin_list,
             plugin_folder,
+            plugin_start,
+            plugin_stop,
             plugin_http,
             plugin_oauth_redirect,
             plugin_secret_get,

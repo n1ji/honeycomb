@@ -66,7 +66,7 @@ export function pluginsSection(): HTMLElement[] {
     h(
       "p",
       { class: "muted" },
-      "Plugins run inside Honeycomb with the same access to your library and files as the app itself. Only turn on plugins you trust.",
+      "Each plugin runs in its own sandbox. It can read your library, change playlists and control playback, and it reaches the internet only at the addresses listed under Access. It can't read your files or another plugin's logins.",
     ),
     own,
   ];

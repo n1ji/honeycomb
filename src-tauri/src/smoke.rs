@@ -3,6 +3,7 @@
 //! The app starts as usual (on a throwaway library unless HONEYCOMB_DATA_DIR
 //! is set), then checks, in the build itself:
 //! - the window's UI loaded and reported in,
+//! - plugins run in their sandbox and can't get out of it,
 //! - scanning the folder finds every audio file,
 //! - every file decodes,
 //! - every file plays through the real audio output (its position moves),
@@ -28,6 +29,59 @@ static UI_READY: Mutex<Option<usize>> = Mutex::new(None);
 
 pub fn folder() -> Option<PathBuf> {
     std::env::var_os("HONEYCOMB_SMOKE").filter(|v| !v.is_empty()).map(PathBuf::from)
+}
+
+/// Two plugins the self-test runs: probe-a keeps a secret, and probe-b tries
+/// to read it and to get out of its sandbox every way it can think of.
+const PROBES: [(&str, &str); 2] = [
+    ("probe-a", include_str!("../../tests/sandbox/probe-a.js")),
+    ("probe-b", include_str!("../../tests/sandbox/probe-b.js")),
+];
+
+/// Put the probe plugins in the (throwaway) library and turn them on, before the UI starts.
+pub fn install_probes(plugins: &Path, conn: &rusqlite::Connection) -> anyhow::Result<()> {
+    let mut enabled = crate::plugins::enabled_ids(conn);
+    for (id, main) in PROBES {
+        std::fs::create_dir_all(plugins.join(id))?;
+        let manifest = serde_json::json!({ "id": id, "name": id, "apiVersion": crate::plugins::API_VERSION });
+        std::fs::write(plugins.join(id).join(crate::plugins::MANIFEST), manifest.to_string())?;
+        std::fs::write(plugins.join(id).join("main.js"), main)?;
+        if !enabled.iter().any(|e| e == id) {
+            enabled.push(id.to_string());
+        }
+    }
+    db::set_setting(conn, "plugins.enabled", &serde_json::to_string(&enabled)?)?;
+    Ok(())
+}
+
+fn sandbox(state: &AppState, r: &mut Report) {
+    let setting = |key: &str| {
+        state.conn().query_row("SELECT value FROM settings WHERE key = ?1", [key], |row| row.get::<_, String>(0)).ok()
+    };
+    // The UI reports in after its plugins started, so the answers are there already.
+    let own = setting("plugin.probe-a.result");
+    r.check(own.as_deref() == Some("ok"), format!("plugin sandbox: a plugin runs and keeps its own secret ({})", own.as_deref().unwrap_or("it never started")));
+    let out = setting("plugin.probe-b.result");
+    r.check(
+        out.as_deref() == Some("ok"),
+        match out.as_deref() {
+            Some("ok") => "plugin sandbox: no way out of it, and no other plugin's secret".to_string(),
+            Some(how) => format!("plugin sandbox: a plugin {how}"),
+            None => "plugin sandbox: the second test plugin never finished".to_string(),
+        },
+    );
+    let kept = crate::plugins::secret_get(&state.conn(), "probe-a", "token");
+    let breach = setting("probe.breach");
+    r.check(
+        kept.as_deref() == Some("probe-a-secret") && breach.is_none(),
+        match breach {
+            Some(how) => format!("plugin sandbox: a plugin called an app command directly ({how})"),
+            None => "plugin sandbox: app commands only answer the app's own page".to_string(),
+        },
+    );
+    if setting("plugin.probe-b.crypto").as_deref() == Some("no") {
+        r.note("plugins have no crypto.subtle on this system");
+    }
 }
 
 pub fn ui_ready(tracks: usize) {
@@ -105,6 +159,7 @@ fn run(app: &AppHandle, dir: &Path, r: &mut Report) {
         std::thread::sleep(Duration::from_millis(100));
     };
     r.check(ui.is_some(), "UI loaded");
+    sandbox(&state, r);
 
     // Scan.
     let files: Vec<PathBuf> = walkdir::WalkDir::new(dir)

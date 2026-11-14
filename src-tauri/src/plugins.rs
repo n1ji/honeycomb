@@ -1,10 +1,13 @@
 //! Plugins: folders under `<data dir>/plugins/<id>/` holding a `plugin.json`
-//! manifest and an ES module the UI imports. Plugins that ship with
-//! Honeycomb sit in the app's resources (`plugins/` in the repo); one of the
-//! same id in the user's folder takes its place. They're served over the
-//! `plugin://` protocol, and get network access only to the hosts their
-//! manifest lists. Plugins run in the app's own webview, so these limits are
-//! guard rails against mistakes, not a sandbox: only enable plugins you trust.
+//! manifest and an ES module. Plugins that ship with Honeycomb sit in the
+//! app's resources (`plugins/` in the repo); one of the same id in the user's
+//! folder takes its place.
+//!
+//! Each plugin runs in its own sandboxed frame (see `src/plugins.ts`), which
+//! can't call commands: Tauri only takes them from the app's own page. The
+//! page passes a plugin's requests on with the plugin's id attached, and the
+//! limits (hosts, ports, its own secrets) are checked here. A plugin's files
+//! are served over `plugin://` under a random token only its frame knows.
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -22,9 +25,12 @@ use tauri::http::{Response, StatusCode, header};
 
 pub const MANIFEST: &str = "plugin.json";
 /// Bumped when the UI's plugin API changes in a way that breaks plugins.
-pub const API_VERSION: u32 = 1;
+pub const API_VERSION: u32 = 2;
 /// Largest HTTP response body handed to a plugin.
 const MAX_BODY: u64 = 32 * 1024 * 1024;
+/// The script that sets a plugin's frame up, served next to the plugin's own files.
+pub const RUNTIME: &str = "__honeycomb__/runtime.js";
+const RUNTIME_JS: &str = include_str!("../../src/plugin-runtime.js");
 /// Largest browser request the OAuth redirect listener reads.
 const MAX_REDIRECT_REQUEST: u64 = 16 * 1024;
 
@@ -121,6 +127,9 @@ pub fn read_manifest(dir: &Path, id: &str) -> Result<Manifest> {
     if m.api_version > API_VERSION {
         bail!("needs a newer Honeycomb (plugin API {}, this build has {API_VERSION})", m.api_version);
     }
+    if m.api_version < API_VERSION {
+        bail!("was written for plugin API {}; this Honeycomb has {API_VERSION}, so the plugin needs updating", m.api_version);
+    }
     Ok(m)
 }
 
@@ -162,10 +171,29 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// The file `uri_path` ("/<id>/<file>") names, if it's inside that plugin's folder.
-fn resolve(dir: &Path, uri_path: &str) -> Option<PathBuf> {
-    let path = percent_decode(uri_path);
-    let (id, rest) = path.trim_start_matches('/').split_once('/')?;
+/// Running plugins: the token in each one's `plugin://` URLs, and its id.
+static SESSIONS: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+
+/// A new token for plugin `id`'s files; the one it had stops working.
+pub fn start(id: &str) -> String {
+    let token: String = rand::random::<[u8; 16]>().iter().map(|b| format!("{b:02x}")).collect();
+    let mut sessions = SESSIONS.lock().unwrap_or_else(|p| p.into_inner());
+    sessions.retain(|(_, i)| i != id);
+    sessions.push((token.clone(), id.to_string()));
+    token
+}
+
+pub fn stop(id: &str) {
+    SESSIONS.lock().unwrap_or_else(|p| p.into_inner()).retain(|(_, i)| i != id);
+}
+
+fn session(token: &str) -> Option<String> {
+    let sessions = SESSIONS.lock().unwrap_or_else(|p| p.into_inner());
+    sessions.iter().find(|(t, _)| t == token).map(|(_, id)| id.clone())
+}
+
+/// The file `rest` names inside plugin `id`'s folder, if it's really in there.
+fn resolve(dir: &Path, id: &str, rest: &str) -> Option<PathBuf> {
     if !valid_id(id) || rest.is_empty() {
         return None;
     }
@@ -177,13 +205,7 @@ fn resolve(dir: &Path, uri_path: &str) -> Option<PathBuf> {
 fn content_type(path: &Path) -> &'static str {
     match path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref() {
         Some("js" | "mjs") => "text/javascript",
-        Some("css") => "text/css",
         Some("json") => "application/json",
-        Some("html") => "text/html",
-        Some("svg") => "image/svg+xml",
-        Some("png") => "image/png",
-        Some("jpg" | "jpeg") => "image/jpeg",
-        Some("webp") => "image/webp",
         _ => "application/octet-stream",
     }
 }
@@ -196,24 +218,31 @@ pub fn enabled_ids(conn: &Connection) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Serves plugin files at `plugin://localhost/<id>/<file>` (`http://plugin.localhost/…` on Windows),
-/// for plugins that are turned on.
-pub fn serve(dirs: &Dirs, enabled: &[String], uri_path: &str) -> Response<Vec<u8>> {
-    let id = percent_decode(uri_path).trim_start_matches('/').split('/').next().unwrap_or("").to_string();
-    let file = enabled.contains(&id).then(|| resolve(dirs.dir_of(&id), uri_path)).flatten();
-    let Some(file) = file else {
+/// Serves a running plugin's files at `plugin://localhost/<token>/<file>`
+/// (`http://plugin.localhost/…` on Windows).
+pub fn serve(dirs: &Dirs, uri_path: &str) -> Response<Vec<u8>> {
+    let path = percent_decode(uri_path);
+    let found = path.trim_start_matches('/').split_once('/').and_then(|(token, rest)| {
+        let id = session(token)?;
+        if rest == RUNTIME {
+            return Some(("text/javascript", RUNTIME_JS.as_bytes().to_vec()));
+        }
+        let file = resolve(dirs.dir_of(&id), &id, rest)?;
+        Some((content_type(&file), std::fs::read(&file).ok()?))
+    });
+    let Some((mime, data)) = found else {
         return Response::builder().status(StatusCode::NOT_FOUND).body(Vec::new()).unwrap();
     };
-    match std::fs::read(&file) {
-        Ok(data) => Response::builder()
-            .header(header::CONTENT_TYPE, content_type(&file))
-            // Module scripts from a custom scheme count as cross-origin.
-            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-            .header(header::CACHE_CONTROL, "no-cache")
-            .body(data)
-            .unwrap(),
-        Err(_) => Response::builder().status(StatusCode::NOT_FOUND).body(Vec::new()).unwrap(),
-    }
+    Response::builder()
+        .header(header::CONTENT_TYPE, mime)
+        // The frame has no origin of its own, so its imports count as cross-origin.
+        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+        .header(header::CACHE_CONTROL, "no-cache")
+        // Only ever a script to import: opened as a page, nothing in it runs.
+        .header(header::CONTENT_SECURITY_POLICY, "sandbox; default-src 'none'")
+        .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
+        .body(data)
+        .unwrap()
 }
 
 // ---------- HTTP for plugins ----------
@@ -429,18 +458,42 @@ mod tests {
     fn serves_only_inside_the_plugin_folder() {
         let dir = std::env::temp_dir().join(format!("honeycomb-plugins-test-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("demo/lib")).unwrap();
+        std::fs::create_dir_all(dir.join("other")).unwrap();
         std::fs::write(dir.join("demo/main.js"), "export {}").unwrap();
         std::fs::write(dir.join("demo/lib/x.js"), "").unwrap();
+        std::fs::write(dir.join("other/main.js"), "").unwrap();
         std::fs::write(dir.join("secret.txt"), "").unwrap();
-        assert!(resolve(&dir, "/demo/main.js").is_some());
-        assert!(resolve(&dir, "/demo%2Flib%2Fx.js").is_some());
-        assert!(resolve(&dir, "/demo/../secret.txt").is_none());
-        assert!(resolve(&dir, "/demo/%2E%2E/secret.txt").is_none());
-        assert!(resolve(&dir, "/Demo/main.js").is_none());
-        // Plugins that are turned off aren't served at all.
+        assert!(resolve(&dir, "demo", "main.js").is_some());
+        assert!(resolve(&dir, "demo", "lib/x.js").is_some());
+        assert!(resolve(&dir, "demo", "../secret.txt").is_none());
+        assert!(resolve(&dir, "demo", "../other/main.js").is_none());
+        assert!(resolve(&dir, "Demo", "main.js").is_none());
+
+        // Files are only reachable through the token of a plugin that's running.
         let dirs = Dirs { user: dir.clone(), bundled: None };
-        assert_eq!(serve(&dirs, &["demo".into()], "/demo/main.js").status(), StatusCode::OK);
-        assert_eq!(serve(&dirs, &[], "/demo/main.js").status(), StatusCode::NOT_FOUND);
+        let status = |path: &str| serve(&dirs, path).status();
+        assert_eq!(status("/demo/main.js"), StatusCode::NOT_FOUND);
+        let token = start("demo");
+        assert_eq!(status(&format!("/{token}/main.js")), StatusCode::OK);
+        assert_eq!(status(&format!("/{token}/lib%2Fx.js")), StatusCode::OK);
+        assert_eq!(status(&format!("/{token}/{RUNTIME}")), StatusCode::OK);
+        assert_eq!(status(&format!("/{token}/%2E%2E/other/main.js")), StatusCode::NOT_FOUND);
+        assert_eq!(status(&format!("/{token}/../secret.txt")), StatusCode::NOT_FOUND);
+        // Starting again replaces the token; stopping ends it.
+        let second = start("demo");
+        assert_eq!(status(&format!("/{token}/main.js")), StatusCode::NOT_FOUND);
+        assert_eq!(status(&format!("/{second}/main.js")), StatusCode::OK);
+        stop("demo");
+        assert_eq!(status(&format!("/{second}/main.js")), StatusCode::NOT_FOUND);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn old_api_versions_are_refused() {
+        let dir = std::env::temp_dir().join(format!("honeycomb-plugins-api-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("old")).unwrap();
+        std::fs::write(dir.join("old").join(MANIFEST), r#"{"id":"old","name":"Old","apiVersion":1}"#).unwrap();
+        assert!(read_manifest(&dir, "old").unwrap_err().to_string().contains("needs updating"));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -462,9 +515,9 @@ mod tests {
             listed.iter().map(|p| (p.manifest.as_ref().unwrap().name.as_str(), p.bundled)).collect();
         assert_eq!(names, [("Other", true), ("Mine", false)]);
         assert_eq!(dirs.manifest("other").unwrap().name, "Other");
-        let ids = ["scrobbling".to_string(), "other".to_string()];
-        assert_eq!(serve(&dirs, &ids, "/scrobbling/main.js").body(), b"Mine");
-        assert_eq!(serve(&dirs, &ids, "/other/main.js").body(), b"Other");
+        let (mine, other) = (start("scrobbling"), start("other"));
+        assert_eq!(serve(&dirs, &format!("/{mine}/main.js")).body(), b"Mine");
+        assert_eq!(serve(&dirs, &format!("/{other}/main.js")).body(), b"Other");
         std::fs::remove_dir_all(&root).unwrap();
     }
 }
