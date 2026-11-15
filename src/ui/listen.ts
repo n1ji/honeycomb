@@ -548,8 +548,8 @@ export function mountListening() {
           h(
             "div",
             { class: "ln-hero-actions" },
-            h("button", { class: "btn primary", type: "button", onclick: () => play(o.ids()) }, "▶  Play"),
-            h("button", { class: "btn", type: "button", onclick: () => play(shuffled(o.ids())) }, "Shuffle"),
+            h("button", { class: "btn primary", type: "button", disabled: !o.ids().length, onclick: () => play(o.ids()) }, "▶  Play"),
+            h("button", { class: "btn", type: "button", disabled: o.ids().length < 2, onclick: () => play(shuffled(o.ids())) }, "Shuffle"),
             more ? h("button", { class: "btn", type: "button", title: "More", onclick: (e: Event) => more(e as MouseEvent) }, "•••") : null,
           ),
         ),
