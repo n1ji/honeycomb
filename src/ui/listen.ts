@@ -85,6 +85,9 @@ export function mountListening() {
   let current: PageView = { el: h("div", {}) };
   let query = "";
   let dirty = true;
+  let drawn = "";
+  /** What a page's contents depend on; anything else (play counts, offline dots) is a repaint. */
+  const stamp = () => `${store.tracksVersion}|${store.settings.hiddenLibraries ?? ""}|${store.folders.join("\n")}`;
 
   const now = mountNowView(root, {
     album: (t) => show({ kind: "album", key: albumKey(t) }),
@@ -120,6 +123,7 @@ export function mountListening() {
       return;
     }
     dirty = false;
+    drawn = stamp();
     const at = top ?? current.grid?.el.scrollTop ?? 0;
     pendingTop = at;
     current = build();
@@ -663,6 +667,7 @@ export function mountListening() {
   };
   store.on("tracks", () => {
     playlistIds.clear();
+    if (mode() === "listening" && !dirty && !redraw && stamp() === drawn && current.grid) return current.grid.repaint();
     changed();
   });
   store.on("playlists", () => {

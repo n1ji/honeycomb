@@ -17,6 +17,8 @@ export interface VGrid {
   refresh: () => void;
   /** Redraw at a scroll position (going back to a page). */
   restore: (top: number) => void;
+  /** Draw the mounted items again where they are, for small changes (a dot, a count). */
+  repaint: () => void;
 }
 
 const OVERSCAN = 3;
@@ -109,6 +111,15 @@ export function vgrid(o: VGridOptions): VGrid {
     refresh() {
       clear();
       render();
+    },
+    repaint() {
+      for (const [i, old] of live) {
+        const node = o.render(i);
+        node.style.cssText = old.style.cssText;
+        old.replaceWith(node);
+        live.set(i, node);
+      }
+      loadImages();
     },
     restore(top) {
       clear();

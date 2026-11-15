@@ -91,6 +91,12 @@ class Store {
 
   async loadRemote() {
     const [{ ids, states }, servers, folders] = await Promise.all([api.remoteStates(), api.servers(), api.getFolders()]);
+    const same =
+      ids.length === this.remote.size &&
+      ids.every((id, i) => this.remote.get(id) === states[i]) &&
+      JSON.stringify(servers) === JSON.stringify(this.servers) &&
+      folders.join("\n") === this.folders.join("\n");
+    if (same) return;
     this.remote = new Map(ids.map((id, i) => [id, states[i]]));
     this.servers = servers;
     this.folders = folders;

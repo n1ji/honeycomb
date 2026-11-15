@@ -44,7 +44,7 @@ let stamp = "";
  * grouped in one pass over the library order and kept until tracks change.
  */
 export function library(): Library {
-  const now = `${store.tracksVersion}|${store.settings.hiddenLibraries ?? ""}`;
+  const now = `${store.tracksVersion}|${store.settings.hiddenLibraries ?? ""}|${store.folders.join("\n")}`;
   if (cached && now === stamp) return cached;
   const lib: Library = { albums: [], artists: [], songs: [], byKey: new Map(), byName: new Map() };
   for (const id of store.sortCache().libraryIds) {
