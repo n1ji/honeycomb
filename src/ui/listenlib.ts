@@ -35,6 +35,11 @@ export interface Library {
 export const albumKey = (t: Track) => `${t.album}\u0000${artistOf(t)}`;
 export const albumTitle = (a: Album) => a.title || "Unknown album";
 export const artistName = (name: string) => name || "Unknown artist";
+/** "A; B" credits each artist on their own. */
+export const splitArtists = (name: string) => {
+  const parts = name.split(";").map((p) => p.trim()).filter(Boolean);
+  return parts.length ? parts : [name];
+};
 
 let cached: Library | null = null;
 let stamp = "";
@@ -57,13 +62,15 @@ export function library(): Library {
       album = { key, title: t.album, artist: artistOf(t), year: null, ids: [], artId: null, added: 0, duration: 0 };
       lib.byKey.set(key, album);
       lib.albums.push(album);
-      let artist = lib.byName.get(album.artist);
-      if (!artist) {
-        artist = { name: album.artist, albums: [], songs: 0, artId: null };
-        lib.byName.set(album.artist, artist);
-        lib.artists.push(artist);
+      for (const name of splitArtists(album.artist)) {
+        let artist = lib.byName.get(name);
+        if (!artist) {
+          artist = { name, albums: [], songs: 0, artId: null };
+          lib.byName.set(name, artist);
+          lib.artists.push(artist);
+        }
+        artist.albums.push(album);
       }
-      artist.albums.push(album);
     }
     album.ids.push(id);
     album.duration += t.duration;

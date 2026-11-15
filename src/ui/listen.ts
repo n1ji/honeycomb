@@ -4,7 +4,7 @@ import { $, fmtTime, fmtTotal, h, heart } from "../util";
 import { addToPlaylist, newPlaylist, offlineItems, run, setLoved, shuffled } from "./actions";
 import { promptText } from "./dialogs";
 import { saveSetting } from "./layout";
-import { Album, albumKey, albumTitle, Artist, artistName, library, Library } from "./listenlib";
+import { Album, albumKey, albumTitle, Artist, artistName, library, splitArtists, Library } from "./listenlib";
 import { mountNowView } from "./listennow";
 import { MenuItem, openMenu, SEP } from "./menu";
 import { mode, modeSwitch, nowView, setMode } from "./mode";
@@ -211,6 +211,14 @@ export function mountListening() {
   }
 
   const idsOfArtist = (a: Artist) => a.albums.flatMap((al) => al.ids);
+
+  /** One link per credited artist; a name with no page of its own goes to `fallback`. */
+  const artistLinks = (names: string, cls: string, fallback?: string) =>
+    splitArtists(names).flatMap((n, i) => {
+      const go = library().byName.has(n) || !fallback ? n : fallback;
+      const link = h("span", { class: cls, onclick: (e: Event) => (e.stopPropagation(), show({ kind: "artist", name: go })) }, artistName(n));
+      return i ? ["; ", link] : [link];
+    });
 
   /** Songs of each playlist, fetched once until playlists or tracks change. */
   const playlistIds = new Map<number, Promise<number[]>>();
@@ -500,7 +508,7 @@ export function mountListening() {
             "div",
             { class: "ln-row-main" },
             h("div", { class: "ln-row-title", title: t.title }, offlineMark(t.id), t.title),
-            o.numbered && t.artist === o.album?.artist ? null : h("div", { class: "ln-row-sub" }, h("span", { class: "ln-link", onclick: () => show({ kind: "artist", name: artistOf(t) }) }, artist)),
+            o.numbered && t.artist === o.album?.artist ? null : h("div", { class: "ln-row-sub" }, ...artistLinks(artist, "ln-link", artistOf(t))),
           ),
           o.numbered ? null : h("span", { class: "ln-row-album" }, album ? h("span", { class: "ln-link", onclick: () => show({ kind: "album", key: album.key }) }, albumTitle(album)) : null),
           love,
@@ -573,7 +581,7 @@ export function mountListening() {
       art,
       title: albumTitle(a),
       lines: [
-        h("span", { class: "ln-link accent", onclick: () => show({ kind: "artist", name: a.artist }) }, artistName(a.artist)),
+        h("span", {}, ...artistLinks(a.artist, "ln-link accent")),
         h("span", { class: "muted" }, albumMark(a), [a.year, plural(a.ids.length, "song"), fmtTotal(a.duration)].filter(Boolean).join(" · ")),
       ],
       ids: () => a.ids,
@@ -584,7 +592,8 @@ export function mountListening() {
   }
 
   function artistPage(name: string): PageView {
-    const a = library().byName.get(name);
+    const lib = library();
+    const a = lib.byName.get(name) ?? lib.byName.get(splitArtists(name)[0]);
     if (!a) return gone("artist");
     const albums = [...a.albums].sort((x, y) => (x.year ?? 9999) - (y.year ?? 9999) || collator.compare(x.title, y.title));
     const head = hero({
