@@ -112,19 +112,25 @@ fn spawn_sync(app: AppHandle, id: i64) {
             let _ = app.emit("server-sync", SyncEvent { id, songs, done, error, report });
         };
         ev(0, false, None, None);
-        let result = (|| -> anyhow::Result<mirror::SyncReport> {
+        let result = (|| -> anyhow::Result<(mirror::SyncReport, rusqlite::Connection)> {
             let mut conn = db::open(&app.state::<AppState>().db_path)?;
             mirror::flush(&conn)?;
             let client = mirror::client(&conn, id)?;
             let pulled = mirror::pull(&client, &|n| ev(n, false, None, None))?;
-            mirror::apply(&mut conn, id, &pulled)
+            let report = mirror::apply(&mut conn, id, &pulled)?;
+            Ok((report, conn))
         })();
         SYNCING.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
         match result {
-            Ok(r) => {
+            Ok((r, conn)) => {
                 ev(r.tracks, true, None, Some(r));
                 let _ = app.emit("library-changed", ());
                 mirror::poke();
+                match mirror::cache_covers(&conn, id) {
+                    Ok(0) => {}
+                    Ok(n) => eprintln!("servers: kept {n} covers for offline"),
+                    Err(e) => eprintln!("servers: covers: {e:#}"),
+                }
             }
             Err(e) => {
                 let msg = format!("{e:#}");

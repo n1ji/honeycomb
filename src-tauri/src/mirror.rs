@@ -309,6 +309,12 @@ pub fn remove_source(conn: &mut Connection, id: i64, keep: Option<&Path>) -> Res
     }
     if let Ok(c) = ctx() {
         let _ = fs::remove_dir_all(c.data_dir.join("offline").join(id.to_string()));
+        let prefix = format!("{id}-");
+        for e in fs::read_dir(c.data_dir.join("covers")).into_iter().flatten().flatten() {
+            if e.file_name().to_string_lossy().starts_with(&prefix) {
+                let _ = fs::remove_file(e.path());
+            }
+        }
     }
     Ok(report)
 }
@@ -931,24 +937,13 @@ pub fn cover(conn: &Connection, track_id: i64) -> Option<(Vec<u8>, String)> {
         .ok()?;
     let from_file = || file.as_deref().and_then(|f| crate::meta::artwork(Path::new(f))).map(|(d, m)| (d, m.to_string()));
     let Some(cover_id) = cover_id else { return from_file() };
-    let cached = ctx().ok()?.data_dir.join("covers").join(format!("{source}-{}", safe(&cover_id)));
-    if let Ok(data) = fs::read(&cached) {
+    let cached = cover_path(source, &cover_id).ok()?;
+    if let Some(data) = fs::read(&cached).ok().or_else(|| album_cover(conn, track_id)) {
         let mime = sniff(&data);
         return Some((data, mime));
     }
-    let fetched = client(conn, source).ok().and_then(|c| {
-        let resp = c.cover(&cover_id, 600).timeout(Duration::from_secs(20)).call().ok()?;
-        if !resp.content_type().starts_with("image/") {
-            return None;
-        }
-        let mut data = Vec::new();
-        resp.into_reader().take(16 * 1024 * 1024).read_to_end(&mut data).ok()?;
-        Some(data)
-    });
-    match fetched {
+    match client(conn, source).ok().and_then(|c| fetch_cover(&c, &cover_id, &cached)) {
         Some(data) => {
-            let _ = fs::create_dir_all(cached.parent()?);
-            let _ = fs::write(&cached, &data);
             let mime = sniff(&data);
             Some((data, mime))
         }
@@ -956,10 +951,82 @@ pub fn cover(conn: &Connection, track_id: i64) -> Option<(Vec<u8>, String)> {
     }
 }
 
+/// A saved cover of another song on the same album: songs often have covers
+/// of their own on the server, but only one per album is kept.
+fn album_cover(conn: &Connection, track_id: i64) -> Option<Vec<u8>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT o.source_id, o.cover_id FROM remote_tracks t JOIN remote_tracks o
+             ON o.source_id = t.source_id AND o.album_id = t.album_id
+             WHERE t.track_id = ?1 AND o.cover_id IS NOT NULL",
+        )
+        .ok()?;
+    let rows = stmt.query_map([track_id], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))).ok()?;
+    rows.flatten().find_map(|(s, id)| fs::read(cover_path(s, &id).ok()?).ok())
+}
+
+fn cover_path(source: i64, cover_id: &str) -> Result<PathBuf> {
+    Ok(ctx()?.data_dir.join("covers").join(format!("{source}-{}", safe(cover_id))))
+}
+
+fn fetch_cover(c: &Client, cover_id: &str, dest: &Path) -> Option<Vec<u8>> {
+    let resp = c.cover(cover_id, 600).timeout(Duration::from_secs(20)).call().ok()?;
+    if !resp.content_type().starts_with("image/") {
+        return None;
+    }
+    let mut data = Vec::new();
+    resp.into_reader().take(16 * 1024 * 1024).read_to_end(&mut data).ok()?;
+    let _ = fs::create_dir_all(dest.parent()?);
+    let _ = fs::write(dest, &data);
+    Some(data)
+}
+
+/// Download the covers of a server's songs that aren't on this computer yet,
+/// so they show offline too. Gives up when the server stops answering.
+pub fn cache_covers(conn: &Connection, source: i64) -> Result<usize> {
+    // One per album; songs without an album bring their own.
+    let ids: Vec<String> = conn
+        .prepare(
+            "SELECT MIN(cover_id) FROM remote_tracks WHERE source_id = ?1 AND cover_id IS NOT NULL
+             GROUP BY COALESCE(album_id, 'track:' || track_id)",
+        )?
+        .query_map([source], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    let missing: Vec<(String, PathBuf)> = ids
+        .into_iter().filter_map(|id| cover_path(source, &id).ok().map(|p| (id, p))).filter(|(_, p)| !p.exists()).collect();
+    if missing.is_empty() {
+        return Ok(0);
+    }
+    let c = client(conn, source)?;
+    let (mut got, mut failed) = (0, 0);
+    for (id, path) in missing {
+        if fetch_cover(&c, &id, &path).is_some() {
+            got += 1;
+            failed = 0;
+        } else {
+            failed += 1;
+            if failed == 5 {
+                break;
+            }
+        }
+    }
+    Ok(got)
+}
+
+/// A file holding the track's cover, for the system's Now Playing display.
 pub fn cover_file(track_id: i64) -> Option<PathBuf> {
     let conn = db::open(&ctx().ok()?.db_path).ok()?;
     let (data, _) = cover(&conn, track_id)?;
-    let path = ctx().ok()?.data_dir.join("covers").join(format!("track-{track_id}"));
+    let cover_id: Option<(i64, String)> = conn
+        .query_row("SELECT source_id, cover_id FROM remote_tracks WHERE track_id = ?1 AND cover_id IS NOT NULL", [track_id], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .ok();
+    if let Some(path) = cover_id.and_then(|(s, id)| cover_path(s, &id).ok()).filter(|p| p.exists()) {
+        return Some(path);
+    }
+    // Art from an offline copy's tags: one file, overwritten each time.
+    let path = ctx().ok()?.data_dir.join("covers").join("now-playing");
     fs::write(&path, data).ok()?;
     Some(path)
 }
@@ -1235,6 +1302,8 @@ mod tests {
         }
         let (art, mime) = cover(&conn, m1.id).unwrap();
         assert!(art.len() > 100 && mime.starts_with("image/"), "{mime}");
+        assert!(cache_covers(&conn, id).unwrap() > 0);
+        assert_eq!(cache_covers(&conn, id).unwrap(), 0, "already on disk");
 
         let northern: Vec<i64> = tracks.iter().filter(|t| t.album == "Northern Lights").map(|t| t.id).collect();
         pin(&conn, &northern[..1], true).unwrap();
