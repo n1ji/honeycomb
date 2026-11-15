@@ -18,13 +18,18 @@ export type GroupFilter = Partial<Record<keyof Filters, string>>;
 
 type Topic = "tracks" | "view" | "visible" | "selection" | "playlists" | "queue" | "tick" | "signal" | "settings" | "mode";
 
-/** "local" for files on this computer, else the server's source id. */
-export function libraryOf(t: Track): string {
-  if (!t.path.startsWith(REMOTE)) return "local";
-  const rest = t.path.slice(REMOTE.length);
-  return rest.slice(0, rest.indexOf("/"));
-}
 const REMOTE = "subsonic://";
+
+/** The music folder a file sits in (the deepest one, if they nest), else "local". */
+function folderOf(path: string, folders: string[]): string {
+  let best = "";
+  for (const f of folders) {
+    if (f.length <= best.length || !path.startsWith(f)) continue;
+    const next = path[f.length];
+    if (next === undefined || next === "/" || next === "\\" || f.endsWith("/") || f.endsWith("\\")) best = f;
+  }
+  return best || "local";
+}
 
 class Store {
   tracks = new Map<number, Track>();
@@ -33,6 +38,7 @@ class Store {
   /** Songs on a server, and whether they're kept on this computer. Empty without servers. */
   remote = new Map<number, RemoteState>();
   servers: Server[] = [];
+  folders: string[] = [];
 
   view: View = { kind: "library" };
   /** Track ids that make up the current view, before browser filters and search. */
@@ -84,9 +90,10 @@ class Store {
   }
 
   async loadRemote() {
-    const [{ ids, states }, servers] = await Promise.all([api.remoteStates(), api.servers()]);
+    const [{ ids, states }, servers, folders] = await Promise.all([api.remoteStates(), api.servers(), api.getFolders()]);
     this.remote = new Map(ids.map((id, i) => [id, states[i]]));
     this.servers = servers;
+    this.folders = folders;
     this.emit("tracks");
   }
 
@@ -118,10 +125,27 @@ class Store {
 
   // ---------- libraries ----------
 
-  /** False for songs of a library (this computer, or a server) the user hid. */
+  /** A server's source id, the music folder's path, or "local" for files outside them. */
+  libraryOf(t: Track): string {
+    if (!t.path.startsWith(REMOTE)) return folderOf(t.path, this.folders);
+    const rest = t.path.slice(REMOTE.length);
+    return rest.slice(0, rest.indexOf("/"));
+  }
+
+  /** Each music folder, then each server. */
+  libraries(): { key: string; name: string; title: string }[] {
+    const base = (p: string) => p.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || p;
+    const names = this.folders.map(base);
+    return [
+      ...this.folders.map((f, i) => ({ key: f, name: names.indexOf(names[i]) === names.lastIndexOf(names[i]) ? names[i] : f, title: f })),
+      ...this.servers.map((s) => ({ key: String(s.id), name: s.name, title: s.name })),
+    ];
+  }
+
+  /** False for songs of a library (a music folder, or a server) the user hid. */
   shown(t: Track): boolean {
     const hidden = this.hiddenLibraries();
-    return !hidden.size || !hidden.has(libraryOf(t));
+    return !hidden.size || !hidden.has(this.libraryOf(t));
   }
 
   hiddenLibraries(): Set<string> {

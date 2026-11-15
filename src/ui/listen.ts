@@ -126,7 +126,7 @@ export function mountListening() {
     pageBox.replaceChildren(current.el);
     current.grid?.restore(at);
     renderTabs();
-    libsBtn.style.display = store.servers.length || store.hiddenLibraries().size ? "" : "none";
+    libsBtn.style.display = store.libraries().length > 1 || store.hiddenLibraries().size ? "" : "none";
     libsBtn.classList.toggle("on", store.hiddenLibraries().size > 0);
   }
 

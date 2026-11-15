@@ -20,11 +20,11 @@ function same(a: View, b: View) {
   return a.kind === b.kind && (a.kind !== "playlist" || (b.kind === "playlist" && a.id === b.id));
 }
 
-/** Tick libraries (this computer, each server) on and off, in a menu under `anchor`. */
+/** Tick libraries (each music folder, each server) on and off, in a menu under `anchor`. */
 export function openLibrariesMenu(anchor: HTMLElement) {
   const r = anchor.getBoundingClientRect();
   const hidden = store.hiddenLibraries();
-  const libs = [{ key: "local", name: "This computer" }, ...store.servers.map((s) => ({ key: String(s.id), name: s.name }))];
+  const libs = store.libraries();
   openMenu(
     r.left,
     r.bottom + 2,
@@ -111,8 +111,8 @@ export function mountSidebar() {
     const inboxCount = [...store.tracks.values()].filter((t) => t.inbox && store.shown(t)).length;
     const hidden = store.hiddenLibraries();
     const head = h("div", { class: "nav-head" }, h("span", {}, "Library"));
-    // Only worth offering once a server sits next to this computer's files.
-    if (store.servers.length || hidden.size) {
+    // Only worth offering with two or more folders or servers.
+    if (store.libraries().length > 1 || hidden.size) {
       head.append(
         h(
           "span",

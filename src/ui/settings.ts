@@ -348,6 +348,10 @@ export async function openSettings() {
   const serverOptions = h("div");
   const renderFolders = async () => {
     const folders = await api.getFolders();
+    if (folders.join("\n") !== store.folders.join("\n")) {
+      store.folders = folders;
+      store.emit("tracks");
+    }
     const servers = await serverRows(renderFolders);
     serverOptions.replaceChildren(...(servers.length ? [streamQuality(setSetting)] : []));
     folderList.replaceChildren(
