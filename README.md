@@ -23,6 +23,11 @@ The Mac and Windows builds aren't code-signed yet, so your system will warn you 
 
 ## Features
 
+**Two interfaces, one library**
+- **Listening** mode is for playing music: a grid of album covers, artists, playlists and songs with search, a page per album, and a big Now Playing view with lyrics and Next Up.
+- **Advanced** mode is for looking after a library: the column browser, the track table, tag editing, the Inbox and smart playlist rules.
+- A switch moves between them (Ctrl/⌘ + L) without interrupting playback, and Honeycomb remembers which one you use.
+
 **Library and browsing**
 - Add music folders and Honeycomb scans them in the background. Unchanged files are skipped on rescans, and files you delete leave the library.
 - A Genre → Artist → Album column browser above a virtualized track list that stays fast with 100,000 tracks.
@@ -92,6 +97,8 @@ These are one machine's numbers, not a guarantee. Method, the full results and h
 | Ctrl/⌘ + → / ← | Next / previous track |
 | Ctrl/⌘ + F | Search |
 | Ctrl/⌘ + , | Settings |
+| Ctrl/⌘ + L | Switch between Listening and Advanced mode |
+| Esc | Listening mode: close Now Playing, or go back |
 | Enter | Play selected track |
 | Delete | Remove from playlist / queue |
 | Ctrl/⌘ + A | Select all |
@@ -117,6 +124,7 @@ Pushing a tag made by `scripts/release.sh` (like `v0.2.0`) builds a universal ma
 ```
 src/                 TypeScript UI (no framework)
   ui/                sidebar, column browser, track list, player bar, lyrics, dialogs
+  ui/listen*.ts      Listening mode: cover grid, album pages, Now Playing view (vgrid.ts virtualizes it)
   store.ts           app state and view filtering/sorting
   api.ts             typed wrappers around the Rust commands
 src-tauri/src/

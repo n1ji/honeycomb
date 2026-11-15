@@ -89,7 +89,7 @@ export function openTrackMenu(x: number, y: number, group?: number[], pick?: Syn
 }
 
 /** Keeping server songs on this computer, or letting them go. */
-function offlineItems(ids: number[], albums: boolean): MenuItem[] {
+export function offlineItems(ids: number[], albums: boolean): MenuItem[] {
   const online = ids.filter((id) => store.remote.get(id) === "remote");
   const kept = ids.filter((id) => store.remote.get(id) !== "remote");
   const out: MenuItem[] = [];
@@ -127,7 +127,7 @@ function pickName(pick: SyncPick): string {
 }
 
 /** A shuffled copy (Fisher-Yates), for playing a whole artist or album in random order. */
-function shuffled(ids: number[]): number[] {
+export function shuffled(ids: number[]): number[] {
   const out = [...ids];
   for (let i = out.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -164,7 +164,7 @@ export async function ignoreInboxTracks(ids: number[]) {
   toast(`Removed ${removed.length} track${removed.length === 1 ? "" : "s"}; rescans will skip ${removed.length === 1 ? "it" : "them"}`);
 }
 
-async function setRating(ids: number[], rating: number) {
+export async function setRating(ids: number[], rating: number) {
   await api.setRating(ids, rating);
   store.updateTracks(ids.map((id) => ({ ...store.tracks.get(id)!, rating })));
 }

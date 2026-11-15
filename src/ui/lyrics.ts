@@ -9,6 +9,13 @@ const SOURCES: Record<Lyrics["source"], string> = {
   none: "",
 };
 
+/** Both modes show lyrics; they share one lookup per song. */
+let lookup: { id: number; result: Promise<Lyrics> } | null = null;
+function lyricsFor(id: number): Promise<Lyrics> {
+  if (lookup?.id !== id) lookup = { id, result: api.lyrics(id) };
+  return lookup.result;
+}
+
 /** After the user scrolls the lyrics, leave them alone for this long. */
 const MANUAL_SCROLL_MS = 4000;
 
@@ -85,7 +92,7 @@ export function mountLyrics(box: HTMLElement) {
     if (id === null) return message("Nothing playing");
     message("Looking for lyrics…");
     try {
-      const l = await api.lyrics(id);
+      const l = await lyricsFor(id);
       if (trackId === id) render(l);
     } catch (e) {
       if (trackId === id) message(`Couldn't load lyrics: ${e}`);

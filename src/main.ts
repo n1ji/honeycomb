@@ -8,6 +8,8 @@ import { run } from "./ui/actions";
 import { mountBrowser, mountToolbar } from "./ui/browser";
 import { mountNowPlaying, mountPlayerBar } from "./ui/playerbar";
 import { applyLayout, mountSplitters } from "./ui/layout";
+import { mountListening } from "./ui/listen";
+import { applyMode, mode, toggleMode } from "./ui/mode";
 import { applyTheme, openSettings } from "./ui/settings";
 import { needsSetup, openSetup } from "./ui/setup";
 import { mountSidebar } from "./ui/sidebar";
@@ -38,6 +40,7 @@ async function main() {
   store.settings = await api.getSettings();
   applyTheme();
   applyLayout();
+  applyMode();
 
   const sidebar = mountSidebar();
   mountToolbar();
@@ -46,7 +49,12 @@ async function main() {
   mountPlayerBar();
   mountNowPlaying();
   mountSplitters();
-  sidebar.setStatus("");
+  const listening = mountListening();
+  const setStatus = (text: string) => {
+    sidebar.setStatus(text);
+    listening.setStatus(text);
+  };
+  setStatus("");
 
   await listen<Tick>("player-tick", (e) => {
     store.tick = e.payload;
@@ -75,7 +83,7 @@ async function main() {
   let reloading = false;
   await listen<ScanProgress>("scan-progress", (e) => {
     const { done, total } = e.payload;
-    sidebar.setStatus(`Scanning… ${done.toLocaleString()} / ${total.toLocaleString()}`);
+    setStatus(`Scanning… ${done.toLocaleString()} / ${total.toLocaleString()}`);
     // Show new music as it arrives on big first scans, without reloading
     // constantly: a big library waits longer between reloads.
     if (!reloading && Date.now() - lastReload > reloadGap) {
@@ -93,7 +101,7 @@ async function main() {
     }
   });
   await listen<ScanFinished>("scan-finished", (e) => {
-    sidebar.setStatus("");
+    setStatus("");
     const { addedOrUpdated, removed, errors, inboxed, unreachable } = e.payload;
     const parts: string[] = [];
     if (addedOrUpdated || removed) {
@@ -114,7 +122,7 @@ async function main() {
     run(() => store.loadTracks(true));
   });
   await listen<string>("scan-error", (e) => {
-    sidebar.setStatus("");
+    setStatus("");
     toast(`Scan failed: ${e.payload}`, true);
   });
 
@@ -122,7 +130,7 @@ async function main() {
   await listen("remote-states", () => run(() => store.loadRemote()));
   await listen<ServerSync>("server-sync", (e) => {
     const { songs, done, error } = e.payload;
-    sidebar.setStatus(done ? "" : `Syncing server… ${songs.toLocaleString()} songs`);
+    setStatus(done ? "" : `Syncing server… ${songs.toLocaleString()} songs`);
     if (error) toast(`Server sync failed: ${error}`, true);
   });
 
@@ -146,7 +154,13 @@ async function main() {
     const typing = target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT";
     if (modKey(e) && e.key.toLowerCase() === "f") {
       e.preventDefault();
-      ($("#search") as HTMLInputElement).focus();
+      if (mode() === "listening") listening.focusSearch();
+      else ($("#search") as HTMLInputElement).focus();
+      return;
+    }
+    if (modKey(e) && e.key.toLowerCase() === "l" && !document.querySelector(".backdrop")) {
+      e.preventDefault();
+      run(toggleMode);
       return;
     }
     if (modKey(e) && e.key === ",") {

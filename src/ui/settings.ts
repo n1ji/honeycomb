@@ -6,6 +6,7 @@ import { run } from "./actions";
 import { button, modal } from "./dialogs";
 import { openColumnsCustomizer, openPlayerBarCustomizer, setLayoutSetting } from "./customize";
 import { openImporter } from "./importer";
+import { Mode, mode, setMode } from "./mode";
 import { pluginsSection } from "./pluginsettings";
 import { openAddServer, serverRows, streamQuality } from "./servers";
 
@@ -181,8 +182,17 @@ function layoutSection(m: { close: () => void }): HTMLElement[] {
     m.close();
     fn();
   };
+  const iface = layoutSelect(
+    [
+      ["listening", "Listening: albums, artists and what's playing"],
+      ["advanced", "Advanced: browser, columns, tags and Inbox"],
+    ],
+    mode,
+    (v) => setMode(v as Mode),
+  );
   return [
     h("h3", {}, "Layout"),
+    h("label", { class: "field inline" }, h("span", {}, "Interface"), iface),
     h("label", { class: "field inline" }, h("span", {}, "Sidebar"), sidebar),
     h("label", { class: "field inline" }, h("span", {}, "Now Playing panel"), np),
     h("label", { class: "field inline" }, h("span", {}, "Player bar"), bar),

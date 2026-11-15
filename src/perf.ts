@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { api } from "./api";
 import { store } from "./store";
 import { $ } from "./util";
+import { library } from "./ui/listenlib";
+import { applyMode } from "./ui/mode";
 
 /**
  * Benchmark mode, on when the app runs with HONEYCOMB_PERF=1. Times startup,
@@ -71,5 +73,59 @@ export async function runBenchmark(mainStart: number, loaded: number) {
   await log(
     `scroll: ${(1000 / avg).toFixed(0)} fps avg, p95 frame ${ms(deltas[Math.floor(deltas.length * 0.95)])}, worst ${ms(deltas[deltas.length - 1])}`,
   );
+  await listeningBenchmark();
   await log("done");
+}
+
+/** Scroll `el` a few rows per frame and report frame times. */
+async function scrollTimes(label: string, el: HTMLElement, step: number) {
+  el.scrollTop = 0;
+  await settle();
+  const deltas: number[] = [];
+  let last = await frame();
+  for (let i = 0; i < 300; i++) {
+    el.scrollTop += step;
+    const now = await frame();
+    deltas.push(now - last);
+    last = now;
+  }
+  deltas.sort((a, b) => a - b);
+  const avg = deltas.reduce((a, b) => a + b, 0) / deltas.length;
+  await log(`${label}: ${(1000 / avg).toFixed(0)} fps avg, p95 frame ${ms(deltas[Math.floor(deltas.length * 0.95)])}, worst ${ms(deltas[deltas.length - 1])}`);
+}
+
+/** Listening mode: first paint of the cover grid, search, and scrolling albums and songs. The mode isn't saved. */
+async function listeningBenchmark() {
+  const was = store.settings.mode;
+  const step = async (label: string, fn: () => unknown) => {
+    const t = performance.now();
+    await fn();
+    await settle();
+    await log(`listening ${label}: ${ms(performance.now() - t)}`);
+  };
+  const tab = (name: string) => [...document.querySelectorAll<HTMLElement>("#listen .ln-tab")].find((b) => b.textContent!.startsWith(name))!;
+  const search = $("#listen-search") as HTMLInputElement;
+  const find = (q: string) => {
+    search.value = q;
+    search.dispatchEvent(new Event("change"));
+  };
+
+  await step("switch + first grid", () => {
+    store.settings.mode = "listening";
+    applyMode();
+    store.emit("mode");
+    tab("Albums").click();
+  });
+  const lib = library();
+  await log(`listening library: ${lib.albums.length.toLocaleString()} albums, ${lib.artists.length.toLocaleString()} artists`);
+  await scrollTimes("listening album grid scroll", $("#listen .vg"), 300);
+  for (const q of ["a", "love", "night city", ""]) await step(`search "${q}"`, () => find(q));
+  await step("artists tab", () => tab("Artists").click());
+  await step("songs tab", () => tab("Songs").click());
+  await scrollTimes("listening song list scroll", $("#listen .vg"), 480);
+  await step("back to albums", () => tab("Albums").click());
+
+  store.settings.mode = was;
+  applyMode();
+  store.emit("mode");
 }

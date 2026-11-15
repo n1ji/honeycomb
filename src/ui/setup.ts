@@ -2,16 +2,17 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { api } from "../api";
 import { enabledIds, ListedPlugin, pluginApi, setEnabled } from "../plugins";
 import { store } from "../store";
-import { h } from "../util";
+import { h, isMac } from "../util";
 import { run } from "./actions";
 import { button, modal } from "./dialogs";
 import { openImporter } from "./importer";
+import { Mode, mode, setMode } from "./mode";
 
 /**
  * Bumped when the setup gets a step people who finished it should still see
  * (e.g. sound analysis). `setup.done` holds the version last finished.
  */
-const SETUP_VERSION = 1;
+const SETUP_VERSION = 2;
 
 export function needsSetup(): boolean {
   return Number(store.settings["setup.done"] || 0) < SETUP_VERSION;
@@ -19,14 +20,16 @@ export function needsSetup(): boolean {
 
 /**
  * The first-start setup: music folders and importing for new users, then the
- * listening history question and the plugins for everyone. People who used
- * Honeycomb before it existed only get the last two. Closing it without
- * finishing asks again on the next start.
+ * listening history question, the plugins and the choice of interface for
+ * everyone. People who used Honeycomb before it existed skip the first two.
+ * Closing it without finishing asks again on the next start.
  */
 export async function openSetup() {
   const fresh = (await api.getFolders()).length === 0 && store.tracks.size === 0;
   const plugins = (await pluginApi.list()).filter((p) => p.bundled && p.manifest);
-  const steps = [...(fresh ? [foldersStep, importStep] : []), historyStep, pluginsStep(plugins)];
+  // Someone who finished an older setup only gets the steps added since.
+  const done = Number(store.settings["setup.done"] || 0);
+  const steps = [...(fresh ? [foldersStep, importStep] : []), ...(done < 1 ? [historyStep, pluginsStep(plugins)] : []), modeStep(fresh)];
 
   const m = modal("", { wide: true });
   m.el.classList.add("setup");
@@ -180,6 +183,28 @@ const historyStep: Step = {
     ];
   },
 };
+
+/** Listening or Advanced. New users start on Listening unless they pick otherwise; everyone else stays where they are. */
+function modeStep(fresh: boolean): Step {
+  return {
+    title: "How do you want Honeycomb to look?",
+    render: (answer) => {
+      let picked: Mode = store.settings.mode ? mode() : fresh ? "listening" : "advanced";
+      const choice = (value: Mode, label: string, detail: string) => {
+        const input = h("input", { type: "radio", name: "mode", value, checked: picked === value });
+        input.addEventListener("change", () => (picked = value));
+        return h("label", { class: "setup-choice" }, input, h("span", {}, h("strong", {}, label), h("span", { class: "muted" }, detail)));
+      };
+      answer({ ok: true, apply: () => setMode(picked) });
+      return [
+        h("p", {}, "Honeycomb has two faces. Both play the same library and the same queue, and you can flip between them any time."),
+        choice("listening", "Listening", "Album covers, artists, playlists and a big Now Playing view with lyrics. For sitting back and playing music."),
+        choice("advanced", "Advanced", "The column browser, the track table with all its columns, tag editing, the Inbox and smart playlist rules. For looking after a library."),
+        h("p", { class: "muted" }, `The Listening / Advanced switch is always on screen, and ${isMac ? "⌘L" : "Ctrl+L"} flips it too.`),
+      ];
+    },
+  };
+}
 
 function pluginsStep(plugins: ListedPlugin[]): Step {
   return {

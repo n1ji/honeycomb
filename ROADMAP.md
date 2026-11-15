@@ -35,8 +35,8 @@ These come first, ahead of the month order below:
 3. 🔧 **Linux on release tags.** *Done on dev:* release tags now build the Linux packages too. The distro test was the AppImage's self-test on Debian 13 (debsrv, under xvfb): the UI loaded in WebKitGTK, scanning worked and all 5 formats decoded. Still open: scrolling feel and real audio on a Linux desktop.
 4. 🟡 **ReplayGain.** *On dev, still needs a listening test and a look at Settings → Playback; no pre-amp for untagged files yet.* Read track and album gain and peak tags, apply them in Kaseki's gain stage (switching exactly at the gapless marker), with a setting (Off / Track / Album), clipping prevention from the peak, and a line in the signal path view.
 5. **Watch library folders.** Use the `notify` crate to start the quick rescan a moment after files change, so new music lands in the Inbox without "Rescan now". If a scan is already running, run another one when it finishes.
-6. **Album art grid view.** A grid of albums for whatever the column browser and search currently show, with cached cover thumbnails so it stays fast at 100k tracks. Click to filter to the album, double-click to play it.
-7. **Listening mode.** *Started 2026-11-15.* A second, simpler interface built around album art, Now Playing and lyrics. Today's interface becomes Advanced mode, a switch moves between them, and Sync works in both.
+6. 🟡 **Album art grid view.** *On dev, as part of Listening mode:* a second interface made for playing music (album cover grid, artists, playlists, songs, album pages, a big Now Playing view), next to the current one, now called Advanced mode. Still open: cached cover thumbnails, so the grid loads small images instead of full-size covers.
+7. 🟡 **Listening mode.** *On dev, started 2026-11-15.* A second, simpler interface built around album art, Now Playing and lyrics. Today's interface becomes Advanced mode, a switch moves between them, and Sync works in both.
 
 ## October 2026: done ahead of plan
 

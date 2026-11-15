@@ -3,6 +3,7 @@ import { $, h } from "../util";
 import { addToPlaylist, clearInbox, importPlaylist, newPlaylist, openPlaylistMenu, openTrackMenu, run } from "./actions";
 import { onSidebarItems, sidebarItems } from "../plugins";
 import { openMenu } from "./menu";
+import { modeSwitch } from "./mode";
 import { openSettings } from "./settings";
 import { openSmartEditor } from "./smarteditor";
 import { saveSetting } from "./layout";
@@ -19,6 +20,21 @@ function same(a: View, b: View) {
   return a.kind === b.kind && (a.kind !== "playlist" || (b.kind === "playlist" && a.id === b.id));
 }
 
+/** Tick libraries (this computer, each server) on and off, in a menu under `anchor`. */
+export function openLibrariesMenu(anchor: HTMLElement) {
+  const r = anchor.getBoundingClientRect();
+  const hidden = store.hiddenLibraries();
+  const libs = [{ key: "local", name: "This computer" }, ...store.servers.map((s) => ({ key: String(s.id), name: s.name }))];
+  openMenu(
+    r.left,
+    r.bottom + 2,
+    libs.map((l) => {
+      const on = !hidden.has(l.key);
+      return { label: `${on ? "✓" : "\u2003"} ${l.name}`, action: () => run(() => store.setLibraryShown(l.key, !on)) };
+    }),
+  );
+}
+
 export function mountSidebar() {
   const root = $("#sidebar");
   const nav = h("nav", { class: "nav" });
@@ -27,6 +43,7 @@ export function mountSidebar() {
     h("div", { class: "brand" }, h("span", { class: "logo" }, "⬢"), "Honeycomb"),
     nav,
     status,
+    h("div", { class: "sidebar-mode" }, modeSwitch()),
     h(
       "div",
       { class: "sidebar-footer" },
@@ -105,18 +122,7 @@ export function mountSidebar() {
             {
               class: `mini${hidden.size ? " on" : ""}`,
               title: "Show or hide libraries",
-              onclick: (e: Event) => {
-                const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                const libs = [{ key: "local", name: "This computer" }, ...store.servers.map((s) => ({ key: String(s.id), name: s.name }))];
-                openMenu(
-                  r.left,
-                  r.bottom + 2,
-                  libs.map((l) => {
-                    const on = !hidden.has(l.key);
-                    return { label: `${on ? "✓" : "\u2003"} ${l.name}`, action: () => run(() => store.setLibraryShown(l.key, !on)) };
-                  }),
-                );
-              },
+              onclick: (e: Event) => openLibrariesMenu(e.currentTarget as HTMLElement),
             },
             "⧉",
           ),

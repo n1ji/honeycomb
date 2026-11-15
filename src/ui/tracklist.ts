@@ -371,7 +371,7 @@ function render() {
 }
 
 /** A dot on server songs kept on this computer, an arrow while one downloads. */
-function offlineMark(id: number): HTMLElement | null {
+export function offlineMark(id: number): HTMLElement | null {
   const s = store.remote.get(id);
   if (!s || s === "remote") return null;
   return s === "downloading" ? h("span", { class: "offline-mark", title: "Downloading to this computer" }, "↓") : h("span", { class: "offline-mark", title: "On this computer" }, "●");

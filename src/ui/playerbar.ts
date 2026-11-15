@@ -9,6 +9,7 @@ import { mountLyrics } from "./lyrics";
 import { run, setLoved } from "./actions";
 import { revealPlaying } from "./tracklist";
 import { openMenu } from "./menu";
+import { mode, nowView } from "./mode";
 import { mountQualityBadge } from "./quality";
 
 /** Transport buttons, in their default order. `layout.pbButtons` picks which show and where. */
@@ -92,7 +93,7 @@ export function mountPlayerBar() {
   const controls = h("div", { class: "pb-controls" });
   const left = h(
     "div",
-    { class: "pb-left", title: "Show playing track", onclick: () => revealPlaying() },
+    { class: "pb-left", title: "Show playing track", onclick: () => (mode() === "listening" ? nowView.toggle() : revealPlaying()) },
     art,
     h("div", { class: "pb-meta" }, h("div", { class: "pb-title-row" }, title, mountQualityBadge()), artist),
   );

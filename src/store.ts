@@ -16,7 +16,7 @@ export interface Filters {
 /** One value per pane, as the sidebar's artist/album/genre shortcuts use. */
 export type GroupFilter = Partial<Record<keyof Filters, string>>;
 
-type Topic = "tracks" | "view" | "visible" | "selection" | "playlists" | "queue" | "tick" | "signal" | "settings";
+type Topic = "tracks" | "view" | "visible" | "selection" | "playlists" | "queue" | "tick" | "signal" | "settings" | "mode";
 
 /** "local" for files on this computer, else the server's source id. */
 export function libraryOf(t: Track): string {
