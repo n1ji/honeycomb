@@ -36,6 +36,7 @@ These come first, ahead of the month order below:
 4. 🟡 **ReplayGain.** *On dev, still needs a listening test and a look at Settings → Playback; no pre-amp for untagged files yet.* Read track and album gain and peak tags, apply them in Kaseki's gain stage (switching exactly at the gapless marker), with a setting (Off / Track / Album), clipping prevention from the peak, and a line in the signal path view.
 5. **Watch library folders.** Use the `notify` crate to start the quick rescan a moment after files change, so new music lands in the Inbox without "Rescan now". If a scan is already running, run another one when it finishes.
 6. **Album art grid view.** A grid of albums for whatever the column browser and search currently show, with cached cover thumbnails so it stays fast at 100k tracks. Click to filter to the album, double-click to play it.
+7. **Listening mode.** *Started 2026-11-15.* A second, simpler interface built around album art, Now Playing and lyrics. Today's interface becomes Advanced mode, a switch moves between them, and Sync works in both.
 
 ## October 2026: done ahead of plan
 
@@ -84,8 +85,9 @@ Everything finished so far, including items that were planned for later months a
 - 🚀 Unreadable files are remembered with the reason and skipped until they change; Settings → Library lists them (#6, was Month 5).
 - 🚀 Drag to reorder playlists and the queue; the playing song keeps playing. Dragging onto sidebar playlists works on Mac now too (was Month 6).
 - 🚀 Sync artists and albums to a device, not just playlists; later syncs pick up their new albums too (not on the plan, added along the way).
-- 🔧 Music servers: Navidrome and other OpenSubsonic servers as a library source, streaming through Kaseki (gapless), Keep album offline, plays, hearts, ratings and playlists going back to the server, a Stream from servers quality setting, client certificates (.p12) for servers behind Cloudflare Access and similar, and hiding a library (this computer or any server) from view (was Later, part of the multi-device plan).
+- 🔧 Music servers: Navidrome and other OpenSubsonic servers as a library source, streaming through Kaseki (gapless), Keep album offline, plays, hearts, ratings and playlists going back to the server, a Stream from servers quality setting, client certificates (.p12) for servers behind Cloudflare Access and similar, hiding a library (this computer or any server) from view, and a reminder when adding a server with scrobbling on to let only one of them scrobble (was Later, part of the multi-device plan).
 - 🔧 Folders that can't be reached during a scan (an unplugged drive, a sleeping network share) keep their songs, with their stats and playlist spots, instead of being dropped (not on the plan; known issues now listed in `docs/known-issues.md`).
+- 🔧 Plugins run in their own sandbox (plugin API 2): each one gets only what Honeycomb gives it, and bundled scrobbling works as before. Plugin authors: see `docs/plugins.md` for the small API 2 update. Checked on macOS; Windows and Linux still to try.
 - 🟡 ReplayGain: track and album gain applied in Kaseki per track, Off / Track / Album setting (was Month 5). On dev, not tested by ear yet.
 
 **Done when:** a stranger can download an alpha for Mac or Linux, install it, and receive the next update automatically.
