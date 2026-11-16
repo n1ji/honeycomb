@@ -34,7 +34,7 @@ These come first, ahead of the month order below:
 2. 🚀 **Show the loved flag.** *Live in 0.2.0.* Hearts in the track list, the track menu and Now Playing. Next step: loves sync with Last.fm (Month 2).
 3. 🔧 **Linux on release tags.** *Done on dev:* release tags now build the Linux packages too. The distro test was the AppImage's self-test on Debian 13 (debsrv, under xvfb): the UI loaded in WebKitGTK, scanning worked and all 5 formats decoded. Still open: scrolling feel and real audio on a Linux desktop.
 4. 🔧 **ReplayGain.** *On dev; no pre-amp for untagged files yet.* Read track and album gain and peak tags, apply them in Kaseki's gain stage (switching exactly at the gapless marker), with a setting (Off / Track / Album), clipping prevention from the peak, and a line in the signal path view.
-5. **Watch library folders.** Use the `notify` crate to start the quick rescan a moment after files change, so new music lands in the Inbox without "Rescan now". If a scan is already running, run another one when it finishes.
+5. 🔧 **Watch library folders.** *On dev.* Use the `notify` crate to start the quick rescan a moment after files change, so new music lands in the Inbox without "Rescan now". If a scan is already running, run another one when it finishes.
 6. 🔧 **Album art grid view.** *On dev, as part of Listening mode:* a second interface made for playing music (album cover grid, artists, playlists, songs, album pages, a big Now Playing view), next to the current one, now called Advanced mode. Still open: cached cover thumbnails, so the grid loads small images instead of full-size covers.
 7. 🔧 **Listening mode.** *On dev, started 2026-11-15.* A second, simpler interface built around album art, Now Playing and lyrics. Today's interface becomes Advanced mode, a switch moves between them, and Sync works in both.
 
@@ -89,6 +89,7 @@ Everything finished so far, including items that were planned for later months a
 - 🔧 Folders that can't be reached during a scan (an unplugged drive, a sleeping network share) keep their songs, with their stats and playlist spots, instead of being dropped (not on the plan; known issues now listed in `docs/known-issues.md`).
 - 🔧 Plugins run in their own sandbox (plugin API 2): each one gets only what Honeycomb gives it, and bundled scrobbling works as before. Plugin authors: see `docs/plugins.md` for the small API 2 update. Checked on macOS; Windows and Linux still to try.
 - 🔧 Listening mode: a second interface for playing music (album cover grid, artists, playlists, songs, album pages, a big Now Playing view); the old one is now Advanced mode. Covers the album art grid (was Month 5). On dev.
+- 🔧 Library folders are watched: new and changed files are picked up on their own, no "Rescan now" needed (was Month 5).
 - 🔧 ReplayGain: track and album gain applied in Kaseki per track, Off / Track / Album setting (was Month 5).
 
 **Done when:** a stranger can download an alpha for Mac or Linux, install it, and receive the next update automatically.
@@ -138,7 +139,6 @@ Converting and reading Rockbox play counts were done in October; Rockbox scrobbl
 
 Lyrics were done in October.
 
-- Watch library folders for new and changed files instead of manual rescans.
 - An album art grid view.
 - A basic equalizer.
 - 🟡 Fix: changing the queue in the last 2 seconds of a track (#3) is fixed in code (live in 0.1.1) and needs a listening test. Unreadable files being re-read on every rescan (#6) is fixed on dev. Still open: why 64 files fail to read (#2); Settings → Library → Unreadable files now shows the reasons.
