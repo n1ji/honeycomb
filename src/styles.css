@@ -2839,3 +2839,67 @@ input[type="color"] {
     padding: 44px 20px 20px;
   }
 }
+
+/* Library health */
+.modal.health {
+  width: min(760px, 94vw);
+}
+.health-cats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0 12px;
+}
+.health-cats .chip {
+  border: 1px solid var(--border);
+  background: none;
+  color: var(--text);
+  border-radius: 999px;
+  padding: 3px 10px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.health-cats .chip.on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.health-list {
+  max-height: 55vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.health-issue {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.health-head {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+}
+.health-tag {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.health-issue pre {
+  white-space: pre-wrap;
+  font-size: 12px;
+  margin: 6px 0 0;
+}
+.health-fix {
+  font-size: 12px;
+}
+.health-empty {
+  padding: 30px 0;
+  text-align: center;
+}

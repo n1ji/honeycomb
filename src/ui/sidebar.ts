@@ -7,6 +7,7 @@ import { modeSwitch } from "./mode";
 import { openSettings } from "./settings";
 import { openSmartEditor } from "./smarteditor";
 import { saveSetting } from "./layout";
+import { openHealth } from "./health";
 import { openSync, syncLabel } from "./sync";
 import { mountUpdateBulb } from "./update";
 
@@ -142,6 +143,7 @@ export function mountSidebar() {
       item("Next Up", { kind: "queue" }, "▶", (el) => {
         if (queueLen) el.append(h("span", { class: "badge" }, String(queueLen)));
       }),
+      h("div", { class: "nav-item", onclick: () => openHealth() }, h("span", { class: "nav-icon" }, "✚"), h("span", { class: "nav-label" }, "Library health")),
     );
   };
 
