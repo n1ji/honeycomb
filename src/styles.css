@@ -357,8 +357,17 @@ body {
   white-space: nowrap;
 }
 
+/* In a narrow sidebar the labels give way instead of running into each other. */
+.sidebar-footer .label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+
 /* Both glyphs in the same box, so ⚙ and ⇅ line up with each other and the text. */
 .sidebar-footer .ic {
+  flex-shrink: 0;
   width: 16px;
   font-size: 15px;
   line-height: 1;

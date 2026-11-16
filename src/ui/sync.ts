@@ -32,8 +32,13 @@ let watcher: { progress: () => void; done: (r: SyncReport | null) => void } | nu
 const labels = new Set<HTMLElement>();
 
 function paintLabels() {
-  const text = !running ? "Sync" : running.total ? `Syncing ${running.done.toLocaleString()} / ${running.total.toLocaleString()}` : "Syncing…";
-  for (const l of labels) l.textContent = text;
+  // The ⇅ next to it already says sync, so progress is just the count; the tooltip has it in words.
+  const count = running?.total ? `${running.done.toLocaleString()} / ${running.total.toLocaleString()}` : "";
+  const text = !running ? "Sync" : count || "Syncing…";
+  for (const l of labels) {
+    l.textContent = text;
+    l.title = count ? `Syncing ${count}` : "";
+  }
 }
 
 /** The label of a Sync button, which shows the progress while a sync runs. */
