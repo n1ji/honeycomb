@@ -25,8 +25,10 @@ export function openHealth() {
   const cats = h("div", { class: "health-cats" });
   const list = h("div", { class: "health-list" });
 
-  const fixAll = button("", () =>
-    run(async () => {
+  const fixAll = button(
+    "",
+    () =>
+      run(async () => {
       const todo = issues.filter((i) => i.fix && Object.keys(i.fix).length);
       const ok = await ask(`Write album tags to the songs of ${todo.length} albums? Each album gets its most common album name, album artist and year.`, {
         title: "Fix split albums",
@@ -34,10 +36,16 @@ export function openHealth() {
         okLabel: "Fix all",
       });
       if (!ok) return;
-      for (const i of todo) await apply(i);
-      toast(`Fixed ${todo.length} albums.`);
-      refresh();
+      fixAll.disabled = true;
+      try {
+        for (const i of todo) await apply(i);
+        toast(`Fixed ${todo.length} albums.`);
+      } finally {
+        fixAll.disabled = false;
+        refresh();
+      }
     }),
+    true,
   );
 
   async function apply(i: Issue) {
@@ -45,8 +53,13 @@ export function openHealth() {
   }
 
   function refresh() {
-    issues = checkLibrary(localTracks());
-    render();
+    const tracks = localTracks();
+    list.replaceChildren(h("p", { class: "muted health-empty" }, `Checking ${tracks.length.toLocaleString()} songs…`));
+    // Let the message paint first: a big library takes a moment.
+    setTimeout(() => {
+      issues = checkLibrary(tracks);
+      render();
+    });
   }
 
   function render() {
@@ -74,7 +87,7 @@ export function openHealth() {
     return h(
       "div",
       { class: "health-issue" },
-      h("div", { class: "health-head" }, h("strong", {}, i.title), i.artist ? h("span", { class: "muted" }, ` · ${i.artist}`) : "", h("span", { class: "health-tag" }, CATEGORIES[i.category])),
+      h("div", { class: "health-head" }, h("strong", {}, i.title), i.artist ? h("span", { class: "muted" }, ` · ${i.artist}`) : "", only ? "" : h("span", { class: "health-tag" }, CATEGORIES[i.category])),
       h("div", {}, i.summary),
       i.details.length ? h("details", {}, h("summary", { class: "muted" }, "Details"), h("pre", {}, i.details.join("\n"))) : "",
       fixable ? h("div", { class: "muted health-fix" }, `Fix writes ${describe(i.fix!)}`) : "",
@@ -85,20 +98,21 @@ export function openHealth() {
           m.close();
           run(() => store.showFiltered({ album: store.tracks.get(i.ids[0])?.album ?? i.title }));
         }),
-        fixable
-          ? button(
-              "Fix",
-              () =>
-                run(async () => {
-                  await apply(i);
-                  toast(`Fixed “${i.title}”.`);
-                  refresh();
-                }),
-              true,
-            )
-          : "",
+        fixable ? fixButton(i) : "",
       ),
     );
+  }
+
+  function fixButton(i: Issue) {
+    const b = button("Fix", () => {
+      b.disabled = true;
+      run(async () => {
+        await apply(i);
+        toast(`Fixed “${i.title}”.`);
+        refresh();
+      }).finally(() => (b.disabled = false));
+    });
+    return b;
   }
 
   m.body.replaceChildren(
@@ -106,6 +120,6 @@ export function openHealth() {
     cats,
     list,
   );
-  m.footer.replaceChildren(button("Check again", refresh), fixAll, button("Close", m.close, true));
+  m.footer.replaceChildren(button("Check again", refresh), fixAll, button("Close", m.close));
   refresh();
 }

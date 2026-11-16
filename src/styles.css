@@ -2853,31 +2853,36 @@ input[type="color"] {
 .health-cats .chip {
   border: 1px solid var(--border);
   background: none;
-  color: var(--text);
+  color: var(--muted);
   border-radius: 999px;
   padding: 3px 10px;
   font: inherit;
   font-size: 12px;
+  font-variant-numeric: tabular-nums;
   cursor: pointer;
+  transition: background var(--t-fast), color var(--t-fast);
+}
+.health-cats .chip:hover {
+  color: var(--text);
 }
 .health-cats .chip.on {
-  border-color: var(--accent);
-  color: var(--accent);
+  background: var(--panel-2);
+  color: var(--text);
 }
 .health-list {
   max-height: 55vh;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 10px;
 }
 .health-issue {
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 10px 12px;
+  padding: 12px 0;
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+.health-issue + .health-issue {
+  border-top: 1px solid var(--border);
 }
 .health-head {
   display: flex;
@@ -2893,6 +2898,7 @@ input[type="color"] {
 }
 .health-issue pre {
   white-space: pre-wrap;
+  font: inherit;
   font-size: 12px;
   margin: 6px 0 0;
 }
