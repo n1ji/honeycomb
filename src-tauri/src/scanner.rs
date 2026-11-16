@@ -266,6 +266,21 @@ pub(crate) fn scan(db_path: &Path, progress: &dyn Fn(Progress)) -> Result<Finish
     // Drop tracks whose files are gone or no longer under a library folder.
     let mut stale: Vec<&String> = known.keys().filter(|p| !seen.contains(*p) && !kept(p)).collect();
     conn.execute_batch("BEGIN")?;
+    // A cover.jpg added later leaves the songs' own mtime alone, so songs
+    // without art look for one again.
+    let bare: Vec<String> = conn
+        .prepare("SELECT path FROM tracks WHERE has_art = 0 AND path NOT LIKE 'subsonic://%'")?
+        .query_map([], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    let mut dir_art = dir_art.into_inner().unwrap_or_else(|e| e.into_inner());
+    for p in bare.iter().filter(|p| seen.contains(*p)) {
+        let path = Path::new(p);
+        let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        if *dir_art.entry(dir).or_insert_with(|| meta::folder_art(path).is_some()) {
+            conn.execute("UPDATE tracks SET has_art = 1 WHERE path = ?1", [p])?;
+            changed += 1;
+        }
+    }
     let moved = find_moves(&conn, &stale, &fresh)?;
     for (old, _, new, new_inboxed) in &moved {
         // The old row keeps its id, stats, inbox state and playlist spots and
@@ -394,6 +409,26 @@ mod tests {
             .filter(|t| t.inbox)
             .map(|t| Path::new(&t.path).file_name().unwrap().to_string_lossy().into_owned())
             .collect()
+    }
+
+    #[test]
+    fn a_cover_added_later_is_found() {
+        let root = std::env::temp_dir().join(format!("hc-cover-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        write_wav(&root.join("song.wav"));
+        let db_path = root.join("library.db");
+        let conn = db::open(&db_path).unwrap();
+        db::migrate(&conn).unwrap();
+        conn.execute("INSERT INTO folders (path) VALUES (?1)", [root.to_string_lossy()]).unwrap();
+        let has_art = || db::all_tracks(&conn).unwrap()[0].has_art;
+        scan(&db_path, &|_| {}).unwrap();
+        assert!(!has_art());
+        std::fs::write(root.join("cover.jpg"), [0xFF, 0xD8, 0xFF]).unwrap();
+        let f = scan(&db_path, &|_| {}).unwrap();
+        assert!(has_art());
+        assert_eq!(f.added_or_updated, 1, "so the window reloads");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

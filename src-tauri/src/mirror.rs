@@ -266,31 +266,38 @@ pub fn remove_source(conn: &mut Connection, id: i64, keep: Option<&Path>) -> Res
         out
     };
     let mut report = RemoveReport::default();
-    let tx = conn.transaction()?;
     if let Some(dir) = keep {
+        // Each file is saved as a local song as soon as it has moved, so a
+        // full disk halfway leaves the rest with the server, ready to retry.
+        let folder = dir.to_string_lossy().to_string();
+        if !kept_files.is_empty() {
+            conn.execute("INSERT OR IGNORE INTO folders (path, scanned) VALUES (?1, 1)", [&folder])?;
+            report.folder = Some(folder);
+        }
         for (track_id, file, t) in &kept_files {
             let dest = unique_path(&dir.join(safe(&t.album_artist_or_artist())).join(safe(&t.album)).join(file_name(t, file)));
             if let Some(parent) = dest.parent() {
                 fs::create_dir_all(parent)?;
             }
             if fs::rename(file, &dest).is_err() {
-                fs::copy(file, &dest)?;
+                if let Err(e) = fs::copy(file, &dest) {
+                    let _ = fs::remove_file(&dest);
+                    return Err(e).with_context(|| format!("Couldn't keep {}", t.title));
+                }
                 let _ = fs::remove_file(file);
             }
-            let dest_s = dest.to_string_lossy().to_string();
+            let tx = conn.transaction()?;
             tx.execute(
                 "UPDATE tracks SET path = ?2, mtime = ?3 WHERE id = ?1",
-                params![track_id, dest_s, crate::meta::file_mtime(&dest)],
+                params![track_id, dest.to_string_lossy(), crate::meta::file_mtime(&dest)],
             )?;
             tx.execute("DELETE FROM remote_tracks WHERE track_id = ?1", [track_id])?;
+            tx.commit()?;
             report.kept += 1;
         }
-        let folder = dir.to_string_lossy().to_string();
-        if report.kept > 0 {
-            tx.execute("INSERT OR IGNORE INTO folders (path, scanned) VALUES (?1, 1)", [&folder])?;
-            report.folder = Some(folder);
-        }
-    } else {
+    }
+    let tx = conn.transaction()?;
+    if keep.is_none() {
         for (_, file, _) in &kept_files {
             if fs::remove_file(file).is_ok() {
                 report.deleted += 1;
@@ -335,9 +342,7 @@ impl Track {
 }
 
 fn safe(s: &str) -> String {
-    let s: String = s.chars().map(|c| if "/\\:*?\"<>|".contains(c) || c.is_control() { '_' } else { c }).collect();
-    let s = s.trim().trim_matches('.').to_string();
-    if s.is_empty() { "Unknown".into() } else { s.chars().take(120).collect() }
+    crate::sync::safe_name(s, "Unknown")
 }
 
 fn file_name(t: &Track, file: &str) -> String {
@@ -473,6 +478,11 @@ pub fn apply(conn: &mut Connection, source: i64, pulled: &Pulled) -> Result<Sync
         let rows = stmt.query_map([source], |r| Ok((r.get(0)?, (r.get(1)?, r.get(2)?))))?;
         rows.collect::<rusqlite::Result<_>>()?
     };
+    // A server mid-rescan, or with its music drive missing, answers with
+    // nothing; taking that at its word would empty playlists.
+    if pulled.songs.is_empty() && !known.is_empty() {
+        bail!("The server sent no songs, so its songs were kept. Try again once it has finished scanning.");
+    }
     // Changes still on their way to the server win over what it just said.
     let waiting: HashMap<(String, String), i64> = {
         let mut stmt = tx.prepare("SELECT kind, target, COUNT(*) FROM remote_outbox WHERE source_id = ?1 GROUP BY kind, target")?;
@@ -712,6 +722,9 @@ struct Waiting {
 /// Send what's waiting, oldest first. A change the server refuses is dropped;
 /// one that couldn't be sent stops that server's queue until next time.
 pub fn flush(conn: &Connection) -> Result<usize> {
+    // The worker and syncs both flush; two at once would send each change twice.
+    static FLUSHING: Mutex<()> = Mutex::new(());
+    let _one = FLUSHING.lock().unwrap_or_else(|e| e.into_inner());
     let rows: Vec<Waiting> = {
         let mut stmt = conn.prepare("SELECT id, source_id, kind, target, value FROM remote_outbox ORDER BY id")?;
         let rows = stmt.query_map([], |r| Ok(Waiting { id: r.get(0)?, source: r.get(1)?, kind: r.get(2)?, target: r.get(3)?, value: r.get(4)? }))?;
@@ -836,10 +849,20 @@ pub fn download_next(conn: &Connection) -> Result<Option<i64>> {
     let cached = stream_cache_path(source, &rid, &suffix, None);
     if fs::rename(&cached, &dest).is_err() || !dest.is_file() {
         let client = client(conn, source)?;
-        let resp = client.download(&rid).call().map_err(|e| anyhow!("Downloading failed: {}", crate::subsonic::describe(&e)))?;
+        let resp = match client.download(&rid).call() {
+            Ok(r) => r,
+            // The server answered but won't send this one: unpin it so the rest still come.
+            Err(e @ ureq::Error::Status(..)) => {
+                conn.execute("UPDATE remote_tracks SET state = 'remote' WHERE track_id = ?1", [track_id])?;
+                eprintln!("mirror: not keeping {rid} offline: {}", crate::subsonic::describe(&e));
+                return Ok(Some(track_id));
+            }
+            Err(e) => bail!("Downloading failed: {}", crate::subsonic::describe(&e)),
+        };
         if resp.content_type().contains("json") {
             conn.execute("UPDATE remote_tracks SET state = 'remote' WHERE track_id = ?1", [track_id])?;
-            bail!("The server refused to send {rid}");
+            eprintln!("mirror: the server refused to send {rid}");
+            return Ok(Some(track_id));
         }
         let part = dest.with_extension("part");
         let mut out = fs::File::create(&part)?;
@@ -1171,6 +1194,35 @@ mod tests {
         apply(&mut conn, 1, &pulled(vec![song("a", "One", "Al")])).unwrap();
         crate::scanner::scan(&db_path, &|_| {}).unwrap();
         assert!(track(&conn, "a").is_some());
+    }
+
+    #[test]
+    fn an_empty_answer_keeps_the_songs() {
+        let mut conn = library();
+        apply(&mut conn, 1, &pulled(vec![song("a", "One", "Al"), song("b", "Two", "Al")])).unwrap();
+        assert!(apply(&mut conn, 1, &pulled(vec![])).is_err());
+        assert!(track(&conn, "a").is_some() && track(&conn, "b").is_some());
+    }
+
+    #[test]
+    fn a_song_the_server_wont_send_doesnt_hold_up_the_rest() {
+        let mut conn = library();
+        let dir = std::env::temp_dir().join(format!("hc-refused-{}", std::process::id()));
+        init(&dir.join("library.db"), &dir);
+        let (url, _) = fake(Arc::new(|_, q| match q.get("id").map(|v| v[0].as_str()) {
+            Some("a") => (404, String::new()),
+            _ => (200, r#"{"subsonic-response":{"status":"failed","error":{"code":70}}}"#.into()),
+        }));
+        conn.execute("UPDATE sources SET url = ?1 WHERE id = 1", [&url]).unwrap();
+        secrets::set(&conn, &secret_key(1), "pw").unwrap();
+        forget_client(1);
+        apply(&mut conn, 1, &pulled(vec![song("a", "One", "Al"), song("b", "Two", "Al")])).unwrap();
+        conn.execute("UPDATE remote_tracks SET state = 'downloading'", []).unwrap();
+        assert!(download_next(&conn).unwrap().is_some());
+        assert!(download_next(&conn).unwrap().is_some());
+        assert_eq!(download_next(&conn).unwrap(), None);
+        let left: i64 = conn.query_row("SELECT COUNT(*) FROM remote_tracks WHERE state = 'remote'", [], |r| r.get(0)).unwrap();
+        assert_eq!(left, 2);
     }
 
     #[test]
