@@ -21,6 +21,7 @@ and uses it as the GitHub release notes.
 - Before an update upgrades your library, Honeycomb now keeps a copy of it next to the original (library.db.v<number>.bak), and if the library ever can't be opened you get a message saying so instead of the app just closing.
 - Plays count more honestly: a song that breaks off partway (a file that can't be read to the end, a stream that drops) isn't counted as played, and plays during a long scan on a slow drive aren't lost anymore.
 - With a drive unplugged, playback stops after five songs that can't be found, instead of trying the whole queue one by one.
+- A sync can run in the background now. Hide the Sync window and it carries on, with the ⇅ Sync button counting along ("Syncing 120 / 800"). Click it to bring the progress back or cancel, and a note pops up when it's done. Starting a second sync while one is running is refused, so two can't write to the same device at once.
 
 ## 0.2.0, 2026-11-03
 

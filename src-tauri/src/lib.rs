@@ -518,7 +518,19 @@ fn sync_target(dest: String) -> SyncTarget {
 
 #[tauri::command]
 async fn sync_run(app: AppHandle, profile: sync::Profile) -> CmdResult<sync::Report> {
+    static RUNNING: AtomicBool = AtomicBool::new(false);
+    struct Done;
+    impl Drop for Done {
+        fn drop(&mut self) {
+            RUNNING.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+    if RUNNING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return Err("A sync is already running. Open Sync to see how it's going.".into());
+    }
+    let done = Done;
     tauri::async_runtime::spawn_blocking(move || {
+        let _done = done;
         let state = app.state::<AppState>();
         state.sync_cancel.store(false, std::sync::atomic::Ordering::SeqCst);
         let conn = db::open(&state.db_path).map_err(err)?;

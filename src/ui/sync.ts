@@ -25,6 +25,25 @@ async function saveProfile(p: SyncProfile) {
   await api.setSetting(SETTING, store.settings[SETTING]);
 }
 
+/** The sync in progress, shared by every Sync window and button. */
+let running: { dest: string; done: number; total: number; current: string } | null = null;
+/** The open window that shows it, if any. */
+let watcher: { progress: () => void; done: (r: SyncReport | null) => void } | null = null;
+const labels = new Set<HTMLElement>();
+
+function paintLabels() {
+  const text = !running ? "Sync" : running.total ? `Syncing ${running.done.toLocaleString()} / ${running.total.toLocaleString()}` : "Syncing…";
+  for (const l of labels) l.textContent = text;
+}
+
+/** The label of a Sync button, which shows the progress while a sync runs. */
+export function syncLabel(): HTMLElement {
+  const l = h("span", { class: "label" });
+  labels.add(l);
+  paintLabels();
+  return l;
+}
+
 /** Artists and albums picked with right-click → Sync to a device. */
 export interface SyncPick {
   artists: string[];
@@ -46,7 +65,8 @@ function withPick(q: SyncProfile, pick?: SyncPick): SyncProfile {
  * is chosen), where later syncs keep them.
  */
 export function openSync(pick?: SyncPick) {
-  const m = modal("Sync to a device", { wide: true });
+  let forget = () => {};
+  const m = modal("Sync to a device", { wide: true, onCancel: () => forget() });
   const saved = savedProfiles();
   let p: SyncProfile = withPick(saved[0] ?? { dest: "", wholeLibrary: false, playlists: [], removeUnselected: true }, pick);
 
@@ -225,29 +245,69 @@ export function openSync(pick?: SyncPick) {
       return;
     }
     await saveProfile(p);
-    const bar = h("progress", { max: 1, value: 0 });
-    const current = h("p", { class: "muted sync-current" }, "Getting ready…");
-    m.body.replaceChildren(h("p", {}, `Syncing to ${p.dest}`), bar, current);
-    m.footer.replaceChildren(button("Cancel", () => run(api.syncCancel)));
+    running = { dest: p.dest, done: 0, total: 0, current: "Getting ready…" };
+    paintLabels();
     const unlisten = await listen<{ done: number; total: number; current: string }>("sync-progress", (e) => {
-      bar.max = Math.max(1, e.payload.total);
-      bar.value = e.payload.done;
-      current.textContent = e.payload.total
-        ? `${e.payload.done.toLocaleString()} of ${e.payload.total.toLocaleString()}: ${e.payload.current}`
-        : "Nothing to copy.";
+      if (!running) return;
+      Object.assign(running, e.payload);
+      paintLabels();
+      watcher?.progress();
     });
+    watchProgress();
     let report: SyncReport;
     try {
       report = await api.syncRun(p);
     } catch (e) {
-      showSetup();
-      await describeDest();
+      watcher?.done(null);
       throw e;
     } finally {
       unlisten();
+      running = null;
+      paintLabels();
     }
     if (report.playsImported) await store.loadTracks(true);
-    showReport(report);
+    if (watcher) watcher.done(report);
+    else
+      toast(
+        report.cancelled
+          ? "Sync cancelled."
+          : `Sync finished: ${plural(report.copied, "track")} copied${report.failed.length ? `, ${plural(report.failed.length, "problem")}` : ""}.`,
+        report.failed.length > 0,
+      );
+  }
+
+  /** The progress of the running sync, in this window, until it ends or the window is hidden. */
+  function watchProgress() {
+    if (!running) return;
+    const bar = h("progress", { max: 1, value: 0 });
+    const current = h("p", { class: "muted sync-current" });
+    m.body.replaceChildren(h("p", {}, `Syncing to ${running.dest}`), bar, current, h("p", { class: "muted" }, "You can hide this window; the sync carries on, and the Sync button shows how far it is."));
+    const me = {
+      progress: () => {
+        if (!running) return;
+        bar.max = Math.max(1, running.total);
+        bar.value = running.done;
+        current.textContent = running.total ? `${running.done.toLocaleString()} of ${running.total.toLocaleString()}: ${running.current}` : running.current || "Nothing to copy.";
+      },
+      done: (r: SyncReport | null) => {
+        forget();
+        if (r) return showReport(r);
+        showSetup();
+        run(describeDest);
+      },
+    };
+    forget = () => {
+      if (watcher === me) watcher = null;
+    };
+    m.footer.replaceChildren(
+      button("Hide", () => {
+        forget();
+        m.close();
+      }),
+      button("Cancel sync", () => run(api.syncCancel)),
+    );
+    watcher = me;
+    me.progress();
   }
 
   function showReport(r: SyncReport) {
@@ -275,7 +335,8 @@ export function openSync(pick?: SyncPick) {
     );
   }
 
-  showSetup();
+  if (running) watchProgress();
+  else showSetup();
   renderLists();
   run(describeDest);
 }

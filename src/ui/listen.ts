@@ -10,7 +10,7 @@ import { MenuItem, openMenu, SEP } from "./menu";
 import { mode, modeSwitch, nowView, setMode } from "./mode";
 import { openSettings } from "./settings";
 import { openLibrariesMenu } from "./sidebar";
-import { openSync } from "./sync";
+import { openSync, syncLabel } from "./sync";
 import { offlineMark } from "./tracklist";
 import { vgrid, VGrid } from "./vgrid";
 
@@ -72,7 +72,7 @@ export function mountListening() {
       status,
       search,
       libsBtn,
-      h("button", { class: "icon-btn", title: "Sync to a player or flash drive", onclick: () => openSync() }, h("span", { class: "ic" }, "⇅"), h("span", { class: "label" }, "Sync")),
+      h("button", { class: "icon-btn", title: "Sync to a player or flash drive", onclick: () => openSync() }, h("span", { class: "ic" }, "⇅"), syncLabel()),
       h("button", { class: "icon-btn", title: "Settings", onclick: () => openSettings() }, h("span", { class: "ic" }, "⚙")),
       modeSwitch(),
     ),
