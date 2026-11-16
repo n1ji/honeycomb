@@ -90,6 +90,7 @@ Everything finished so far, including items that were planned for later months a
 - 🔧 Plugins run in their own sandbox (plugin API 2): each one gets only what Honeycomb gives it, and bundled scrobbling works as before. Plugin authors: see `docs/plugins.md` for the small API 2 update. Checked on macOS; Windows and Linux still to try.
 - 🔧 Listening mode: a second interface for playing music (album cover grid, artists, playlists, songs, album pages, a big Now Playing view); the old one is now Advanced mode. Covers the album art grid (was Month 5). On dev.
 - 🔧 Library folders are watched: new and changed files are picked up on their own, no "Rescan now" needed (was Month 5).
+- 🔧 Library health: finds split albums, gaps in track numbers, likely duplicates and missing tags (was Later).
 - 🔧 ReplayGain: track and album gain applied in Kaseki per track, Off / Track / Album setting (was Month 5).
 
 **Done when:** a stranger can download an alpha for Mac or Linux, install it, and receive the next update automatically.
@@ -172,7 +173,6 @@ Open questions and checks, moved here from Month 1:
 
 Moved here from April to keep 1.0 manageable:
 
-- Library health view: missing cover art, missing genre or year, unreadable files, and likely duplicates (using `matching`).
 - Crossfade as an option, off by default so gapless stays the default.
 - A mini player: a small window that stays on top.
 - A command palette (Cmd-K / Ctrl-K) to jump to any artist, album, playlist or setting.
