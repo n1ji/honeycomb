@@ -1,11 +1,14 @@
-//! Login tokens (plugin secrets) live in the system's credential store:
-//! Keychain on macOS, Credential Manager on Windows, Secret Service on Linux.
-//! They're named by their settings keys (`secret.…`).
+//! Logins (server passwords, plugin tokens) live in the system's credential
+//! store: Keychain on macOS, Credential Manager on Windows, Secret Service on
+//! Linux. All of them share one entry, read once per run, so macOS asks for
+//! access once instead of once per login. Builds before that kept one entry
+//! per login; those move into the shared one the first time they're read.
 //!
 //! Older builds kept them in library.db as `secret.*` settings, and `migrate`
 //! moves those over. Where the credential store doesn't work, such a row is
 //! still read so nobody gets signed out, but nothing new is written there.
 
+use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
 use rusqlite::{Connection, OptionalExtension};
@@ -81,6 +84,61 @@ mod store {
     }
 }
 
+/// The account of the shared entry.
+const VAULT: &str = "logins";
+
+#[derive(Default)]
+struct Vault {
+    logins: HashMap<String, String>,
+    /// Keys already looked for as entries of their own this run.
+    checked: HashSet<String>,
+}
+
+#[cfg(not(test))]
+fn with_cache<R>(f: impl FnOnce(&mut Option<Vault>) -> R) -> R {
+    static CACHE: std::sync::Mutex<Option<Vault>> = std::sync::Mutex::new(None);
+    f(&mut CACHE.lock().unwrap_or_else(|e| e.into_inner()))
+}
+
+#[cfg(test)]
+fn with_cache<R>(f: impl FnOnce(&mut Option<Vault>) -> R) -> R {
+    thread_local!(static CACHE: std::cell::RefCell<Option<Vault>> = const { std::cell::RefCell::new(None) });
+    CACHE.with(|c| f(&mut c.borrow_mut()))
+}
+
+/// Run `f` on the logins, reading the shared entry the first time. Not cached
+/// when the store can't be read, so a later call tries again.
+fn with_vault<R>(f: impl FnOnce(&mut Vault) -> R) -> Result<R, String> {
+    with_cache(|cache| {
+        if cache.is_none() {
+            let logins = match store::get(service(), VAULT)? {
+                Some(json) => serde_json::from_str(&json).map_err(|e| format!("the saved logins are damaged: {e}"))?,
+                None => HashMap::new(),
+            };
+            *cache = Some(Vault { logins, checked: HashSet::new() });
+        }
+        Ok(f(cache.as_mut().expect("just filled")))
+    })
+}
+
+fn save(v: &Vault) -> Result<(), String> {
+    let json = serde_json::to_string(&v.logins).map_err(|e| e.to_string())?;
+    store::set(service(), VAULT, &json)
+}
+
+/// A login from an entry of its own (older builds), moved into the shared one.
+fn take_old_entry(v: &mut Vault, account: &str) -> Option<String> {
+    if !v.checked.insert(account.to_string()) {
+        return None;
+    }
+    let old = store::get(service(), account).ok().flatten()?;
+    v.logins.insert(account.to_string(), old.clone());
+    if save(v).is_ok() {
+        let _ = store::delete(service(), account);
+    }
+    Some(old)
+}
+
 fn legacy_row(conn: &Connection, key: &str) -> Option<String> {
     conn.query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| r.get::<_, String>(0))
         .optional()
@@ -94,7 +152,7 @@ fn remove_legacy_row(conn: &Connection, key: &str) -> rusqlite::Result<()> {
 
 /// The secret stored under `key`, or None (empty values count as none).
 pub fn get(conn: &Connection, key: &str) -> Option<String> {
-    let found = match store::get(service(), account(key)) {
+    let found = match with_vault(|v| v.logins.get(account(key)).cloned().or_else(|| take_old_entry(v, account(key)))) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("secrets: reading {key}: {e}");
@@ -105,13 +163,24 @@ pub fn get(conn: &Connection, key: &str) -> Option<String> {
 }
 
 pub fn set(conn: &Connection, key: &str, value: &str) -> Result<(), String> {
-    store::set(service(), account(key), value).map_err(|e| format!("Couldn't save the login in the system keychain: {e}"))?;
+    with_vault(|v| {
+        v.logins.insert(account(key).to_string(), value.to_string());
+        v.checked.insert(account(key).to_string());
+        save(v)
+    })
+    .and_then(|r| r)
+    .map_err(|e| format!("Couldn't save the login in the system keychain: {e}"))?;
     remove_legacy_row(conn, key).map_err(|e| e.to_string())
 }
 
 pub fn delete(conn: &Connection, key: &str) -> Result<(), String> {
     // Signing out still forgets the database copy if the store can't be reached.
-    let stored = store::delete(service(), account(key));
+    let stored = with_vault(|v| {
+        v.checked.insert(account(key).to_string());
+        let _ = store::delete(service(), account(key));
+        if v.logins.remove(account(key)).is_some() { save(v) } else { Ok(()) }
+    })
+    .and_then(|r| r);
     remove_legacy_row(conn, key).map_err(|e| e.to_string())?;
     stored.map_err(|e| format!("Couldn't remove the login from the system keychain: {e}"))
 }
@@ -127,7 +196,15 @@ pub fn migrate(conn: &Connection) {
         Err(e) => return eprintln!("secrets: reading old logins: {e}"),
     };
     for (key, value) in rows {
-        let moved = if value.is_empty() { Ok(()) } else { store::set(service(), account(&key), &value) };
+        let moved = if value.is_empty() {
+            Ok(())
+        } else {
+            with_vault(|v| {
+                v.logins.insert(account(&key).to_string(), value.clone());
+                save(v)
+            })
+            .and_then(|r| r)
+        };
         match moved.map_err(|e| e.to_string()).and_then(|()| remove_legacy_row(conn, &key).map_err(|e| e.to_string())) {
             Ok(()) => eprintln!("secrets: moved {key} into the system keychain"),
             Err(e) => eprintln!("secrets: kept {key} in the database: {e}"),
@@ -156,7 +233,17 @@ mod tests {
         assert_eq!(legacy_row(&conn, "secret.empty"), None);
         assert_eq!(legacy_row(&conn, "volume").as_deref(), Some("0.5"));
         assert_eq!(get(&conn, "secret.plugin.demo.session").as_deref(), Some("sk"));
-        assert_eq!(store::get(service(), "plugin.demo.session").unwrap().as_deref(), Some("sk"));
+        assert!(store::get(service(), VAULT).unwrap().unwrap().contains("\"plugin.demo.session\":\"sk\""));
+    }
+
+    #[test]
+    fn old_entries_move_into_the_shared_one() {
+        let conn = library();
+        store::set(service(), "server.1.password", "pw").unwrap();
+        assert_eq!(get(&conn, "secret.server.1.password").as_deref(), Some("pw"));
+        assert_eq!(store::get(service(), "server.1.password").unwrap(), None, "the old entry is gone");
+        with_cache(|c| *c = None);
+        assert_eq!(get(&conn, "secret.server.1.password").as_deref(), Some("pw"), "read back from the shared entry");
     }
 
     #[test]
