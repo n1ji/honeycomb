@@ -405,6 +405,21 @@ pub struct SyncReport {
     pub playlists: usize,
 }
 
+/// A hash of a server's songs as stored here, to tell whether a sync changed anything.
+pub fn fingerprint(conn: &Connection, source: i64) -> Result<u64> {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    let mut stmt = conn.prepare("SELECT t.* FROM tracks t JOIN remote_tracks r ON r.track_id = t.id WHERE r.source_id = ?1 ORDER BY t.id")?;
+    let cols = stmt.column_count();
+    let mut rows = stmt.query([source])?;
+    while let Some(row) = rows.next()? {
+        for i in 0..cols {
+            format!("{:?}", row.get_ref(i)?).hash(&mut h);
+        }
+    }
+    Ok(h.finish())
+}
+
 pub fn path_for(source: i64, remote_id: &str) -> String {
     format!("{SCHEME}{source}/{remote_id}")
 }

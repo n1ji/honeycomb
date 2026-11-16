@@ -22,7 +22,12 @@ struct SyncEvent {
     done: bool,
     error: Option<String>,
     report: Option<mirror::SyncReport>,
+    /// A background sync: no status line or error toasts.
+    quiet: bool,
 }
+
+/// How often servers are synced in the background, so changes made elsewhere come in.
+const PULL_EVERY: Duration = Duration::from_secs(15 * 60);
 
 #[tauri::command]
 pub fn servers(state: State<AppState>) -> CmdResult<Vec<SourceRow>> {
@@ -44,13 +49,13 @@ pub async fn server_add(app: AppHandle, url: String, username: String, password:
     })
     .await
     .map_err(err)??;
-    spawn_sync(app, id);
+    spawn_sync(app, id, false);
     Ok(id)
 }
 
 #[tauri::command]
 pub fn server_sync(app: AppHandle, id: i64) {
-    spawn_sync(app, id);
+    spawn_sync(app, id, false);
 }
 
 /// Forget a server. With `keep`, its offline copies move to
@@ -103,28 +108,33 @@ pub fn remote_unpin(app: AppHandle, state: State<AppState>, ids: Vec<i64>) -> Cm
     Ok(())
 }
 
-fn spawn_sync(app: AppHandle, id: i64) {
+fn spawn_sync(app: AppHandle, id: i64, quiet: bool) {
     if !SYNCING.lock().unwrap_or_else(|e| e.into_inner()).insert(id) {
         return;
     }
     std::thread::spawn(move || {
         let ev = |songs, done, error: Option<String>, report| {
-            let _ = app.emit("server-sync", SyncEvent { id, songs, done, error, report });
+            let _ = app.emit("server-sync", SyncEvent { id, songs, done, error, report, quiet });
         };
         ev(0, false, None, None);
-        let result = (|| -> anyhow::Result<(mirror::SyncReport, rusqlite::Connection)> {
+        let result = (|| -> anyhow::Result<(mirror::SyncReport, rusqlite::Connection, bool)> {
             let mut conn = db::open(&app.state::<AppState>().db_path)?;
             mirror::flush(&conn)?;
             let client = mirror::client(&conn, id)?;
             let pulled = mirror::pull(&client, &|n| ev(n, false, None, None))?;
+            let before = mirror::fingerprint(&conn, id)?;
             let report = mirror::apply(&mut conn, id, &pulled)?;
-            Ok((report, conn))
+            let changed = report.added + report.removed > 0 || mirror::fingerprint(&conn, id)? != before;
+            Ok((report, conn, changed))
         })();
         SYNCING.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
         match result {
-            Ok((r, conn)) => {
+            Ok((r, conn, changed)) => {
                 ev(r.tracks, true, None, Some(r));
-                let _ = app.emit("library-changed", ());
+                // Playlists aren't in the fingerprint, so a sync someone asked for always reloads.
+                if changed || !quiet {
+                    let _ = app.emit("library-changed", ());
+                }
                 mirror::poke();
                 match mirror::cache_covers(&conn, id) {
                     Ok(0) => {}
@@ -147,7 +157,14 @@ fn spawn_sync(app: AppHandle, id: i64) {
 pub fn spawn_worker(app: AppHandle) {
     std::thread::spawn(move || {
         let Ok(conn) = db::open(&app.state::<AppState>().db_path) else { return };
+        let mut pulled: Option<std::time::Instant> = None;
         loop {
+            if pulled.is_none_or(|t| t.elapsed() >= PULL_EVERY) {
+                pulled = Some(std::time::Instant::now());
+                for s in mirror::sources(&conn).unwrap_or_default() {
+                    spawn_sync(app.clone(), s.id, true);
+                }
+            }
             match mirror::flush(&conn) {
                 Ok(n) if n > 0 => {
                     let _ = app.emit("servers-changed", ());

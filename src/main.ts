@@ -129,7 +129,8 @@ async function main() {
   await listen("library-changed", () => run(() => Promise.all([store.loadRemote(), store.loadPlaylists(), store.loadTracks(true)])));
   await listen("remote-states", () => run(() => store.loadRemote()));
   await listen<ServerSync>("server-sync", (e) => {
-    const { songs, done, error } = e.payload;
+    const { songs, done, error, quiet } = e.payload;
+    if (quiet) return;
     setStatus(done ? "" : `Syncing server… ${songs.toLocaleString()} songs`);
     if (error) toast(`Server sync failed: ${error}`, true);
   });

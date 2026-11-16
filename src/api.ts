@@ -56,6 +56,8 @@ export interface ServerSync {
   songs: number;
   done: boolean;
   error: string | null;
+  /** A background sync, which stays out of sight. */
+  quiet: boolean;
 }
 
 /** A file removed from the Inbox that scans skip. */
