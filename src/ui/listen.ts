@@ -544,9 +544,14 @@ export function mountListening() {
   /** The top of a detail page: back link, cover, name, a line of facts and the play buttons. */
   function hero(o: { art: HTMLElement; title: string; lines: (HTMLElement | string)[]; ids: () => number[]; more?: (e: MouseEvent) => void; hex?: boolean }) {
     const more = o.more;
+    // The cover, blurred far out behind the header, so each page takes its album's colours.
+    const src = o.art.querySelector("img")?.getAttribute("src");
+    const bg = src ? h("div", { class: "ln-hero-bg", "aria-hidden": "true" }) : null;
+    if (bg) bg.style.backgroundImage = `url("${src}")`;
     return h(
       "div",
       { class: "ln-hero-wrap" },
+      bg,
       h("button", { class: "ln-back", type: "button", title: "Back (Esc)", onclick: () => back() }, `‹ ${backLabel()}`),
       h(
         "div",

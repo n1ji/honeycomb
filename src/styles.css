@@ -2438,7 +2438,26 @@ input[type="color"] {
 /* ---------- album, artist and playlist pages ---------- */
 
 .ln-hero-wrap {
+  position: relative;
+  isolation: isolate;
   padding: 14px 0 18px;
+}
+
+.ln-hero-bg {
+  position: absolute;
+  /* Past the page's side padding; the scrolling page clips the soft edges. */
+  inset: -60px -88px -40px;
+  z-index: -1;
+  pointer-events: none;
+  background-size: cover;
+  background-position: center;
+  filter: blur(60px) saturate(1.3);
+  opacity: 0.35;
+  mask-image: linear-gradient(to bottom, #000 40%, transparent);
+}
+
+:root[data-theme="light"] .ln-hero-bg {
+  opacity: 0.25;
 }
 
 .ln-back {
