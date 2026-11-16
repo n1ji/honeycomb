@@ -119,7 +119,8 @@ async function main() {
       );
     }
     if (parts.length) toast(parts.join(" "));
-    run(() => store.loadTracks(true));
+    // Watched folders rescan often; a scan that found nothing leaves the screen alone.
+    if (addedOrUpdated || removed || inboxed) run(() => store.loadTracks(true));
   });
   await listen<string>("scan-error", (e) => {
     setStatus("");

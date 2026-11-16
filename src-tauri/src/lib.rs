@@ -20,6 +20,7 @@ mod stream;
 mod subsonic;
 mod sync;
 mod version;
+mod watch;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -88,6 +89,7 @@ fn add_folder(app: AppHandle, state: State<AppState>, path: String) -> CmdResult
         .conn()
         .execute("INSERT OR IGNORE INTO folders (path) VALUES (?1)", [&path])
         .map_err(err)?;
+    watch::refresh(&app);
     scanner::spawn_scan(app, state.db_path.clone(), state.scanning.clone());
     Ok(())
 }
@@ -96,6 +98,7 @@ fn add_folder(app: AppHandle, state: State<AppState>, path: String) -> CmdResult
 fn remove_folder(app: AppHandle, state: State<AppState>, path: String) -> CmdResult<()> {
     state.conn().execute("DELETE FROM folders WHERE path = ?1", [&path]).map_err(err)?;
     // A rescan drops tracks that are no longer under any folder.
+    watch::refresh(&app);
     scanner::spawn_scan(app, state.db_path.clone(), state.scanning.clone());
     Ok(())
 }
@@ -862,6 +865,7 @@ pub fn run() {
                 plugins: plugins::Dirs { user: plugins_dir, bundled },
             });
             servers::spawn_worker(app.handle().clone());
+            watch::start(app.handle().clone());
             if let Some(folder) = smoke::folder() {
                 smoke::spawn(app.handle().clone(), folder);
             }
