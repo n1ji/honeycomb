@@ -130,24 +130,24 @@ export function openAddServer(onAdded: () => void) {
   url.focus();
 }
 
-/** The "Stream at lower quality" choice, for servers. */
-export function streamQuality(setSetting: (k: string, v: string) => Promise<void>): HTMLElement {
-  const sel = h("select", { class: "input" });
-  for (const [v, label] of [
-    ["", "Original files (best, gapless)"],
-    ["opus-320", "Opus 320 kbps"],
-    ["opus-192", "Opus 192 kbps"],
-    ["opus-128", "Opus 128 kbps"],
-    ["mp3-192", "MP3 192 kbps"],
-  ]) {
-    sel.append(h("option", { value: v, selected: (store.settings.serverStream || "") === v }, label));
-  }
-  sel.addEventListener("change", () => run(() => setSetting("serverStream", sel.value)));
-  return h(
-    "label",
-    { class: "field" },
-    h("span", {}, "Stream from servers"),
-    sel,
-    h("span", { class: "muted" }, "Lower quality saves data away from home. The server converts the music, so changes between songs may not be gapless. Offline copies are always the original files."),
-  );
+/** How servers' music plays (`serverStream`) and is kept offline (`serverOffline`). */
+export function serverQuality(setSetting: (k: string, v: string) => Promise<void>): HTMLElement[] {
+  const pick = (key: string, title: string, note: string) => {
+    const sel = h("select", { class: "input" });
+    for (const [v, label] of [
+      ["", "Original files (best, gapless)"],
+      ["opus-320", "Opus 320 kbps"],
+      ["opus-192", "Opus 192 kbps"],
+      ["opus-128", "Opus 128 kbps"],
+      ["mp3-192", "MP3 192 kbps"],
+    ]) {
+      sel.append(h("option", { value: v, selected: (store.settings[key] || "") === v }, label));
+    }
+    sel.addEventListener("change", () => run(() => setSetting(key, sel.value)));
+    return h("label", { class: "field" }, h("span", {}, title), sel, h("span", { class: "muted" }, note));
+  };
+  return [
+    pick("serverStream", "Stream from servers", "Lower quality saves data away from home. The server converts the music, so changes between songs may not be gapless."),
+    pick("serverOffline", "Keep offline as", "Smaller copies fit more albums on a laptop. Applies to albums kept offline from now on; the server does the converting."),
+  ];
 }

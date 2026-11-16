@@ -860,12 +860,19 @@ pub fn download_next(conn: &Connection) -> Result<Option<i64>> {
         .optional()?;
     let Some((track_id, source, rid, suffix)) = next else { return Ok(None) };
     let c = ctx()?;
-    let dest = c.data_dir.join("offline").join(source.to_string()).join(format!("{}.{}", safe(&rid), ext_or(&suffix)));
+    let tc = transcode(conn, "serverOffline");
+    let ext = tc.as_ref().map_or(ext_or(&suffix), |(fmt, _)| fmt.as_str());
+    let dest = c.data_dir.join("offline").join(source.to_string()).join(format!("{}.{ext}", safe(&rid)));
     fs::create_dir_all(dest.parent().unwrap_or(&c.data_dir))?;
-    let cached = stream_cache_path(source, &rid, &suffix, None);
+    // Played at the same quality already? Then the stream cache has it.
+    let cached = stream_cache_path(source, &rid, &suffix, tc.as_ref());
     if fs::rename(&cached, &dest).is_err() || !dest.is_file() {
         let client = client(conn, source)?;
-        let resp = match client.download(&rid).call() {
+        let request = match &tc {
+            Some((fmt, kbps)) => client.stream(&rid, Some((fmt, *kbps))),
+            None => client.download(&rid),
+        };
+        let resp = match request.call() {
             Ok(r) => r,
             // The server answered but won't send this one: unpin it so the rest still come.
             Err(e @ ureq::Error::Status(..)) => {
@@ -896,8 +903,10 @@ fn ext_or(suffix: &str) -> &str {
     if suffix.is_empty() { "bin" } else { suffix }
 }
 
-fn transcode(conn: &Connection) -> Option<(String, u32)> {
-    let v: String = conn.query_row("SELECT value FROM settings WHERE key = 'serverStream'", [], |r| r.get(0)).optional().ok()??;
+/// The format and bitrate a setting asks the server to convert to (`serverStream`
+/// for playing, `serverOffline` for offline copies), or None for the original.
+fn transcode(conn: &Connection, key: &str) -> Option<(String, u32)> {
+    let v: String = conn.query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| r.get(0)).optional().ok()??;
     let (fmt, kbps) = v.split_once('-')?;
     Some((fmt.to_string(), kbps.parse().ok()?))
 }
@@ -941,10 +950,12 @@ fn open_audio(path: &str) -> Result<(Box<dyn symphonia::core::io::MediaSource>, 
     let c = ctx()?;
     let conn = db::open(&c.db_path)?;
     let p = playable(&conn, path)?;
-    if let Some(f) = p.file.as_deref().and_then(|f| fs::File::open(f).ok()) {
-        return Ok((Box::new(f), p.suffix.to_ascii_lowercase()));
+    if let Some((f, path)) = p.file.as_deref().and_then(|f| Some((fs::File::open(f).ok()?, Path::new(f)))) {
+        // A converted copy's extension is its real format, not the server's.
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or(&p.suffix).to_ascii_lowercase();
+        return Ok((Box::new(f), ext));
     }
-    let tc = transcode(&conn);
+    let tc = transcode(&conn, "serverStream");
     let cache = stream_cache_path(p.source, &p.rid, &p.suffix, tc.as_ref());
     let client = client(&conn, p.source)?;
     drop(conn);
@@ -975,7 +986,7 @@ pub fn prefetch<'a>(paths: impl IntoIterator<Item = &'a str>) {
             if p.file.as_deref().is_some_and(|f| Path::new(f).is_file()) {
                 continue;
             }
-            let tc = transcode(&conn);
+            let tc = transcode(&conn, "serverStream");
             let Ok(client) = client(&conn, p.source) else { continue };
             let cache = stream_cache_path(p.source, &p.rid, &p.suffix, tc.as_ref());
             stream::prefetch(&cache, || client.stream(&p.rid, tc.as_ref().map(|(f, k)| (f.as_str(), *k))));
@@ -1239,6 +1250,24 @@ mod tests {
         assert_eq!(download_next(&conn).unwrap(), None);
         let left: i64 = conn.query_row("SELECT COUNT(*) FROM remote_tracks WHERE state = 'remote'", [], |r| r.get(0)).unwrap();
         assert_eq!(left, 2);
+    }
+
+    #[test]
+    fn offline_copies_can_be_converted_by_the_server() {
+        let mut conn = library();
+        let dir = std::env::temp_dir().join(format!("hc-offline-opus-{}", std::process::id()));
+        init(&dir.join("library.db"), &dir);
+        let (url, log) = fake(Arc::new(|_, _| (200, ok(""))));
+        conn.execute("UPDATE sources SET url = ?1 WHERE id = 1", [&url]).unwrap();
+        conn.execute("INSERT INTO settings (key, value) VALUES ('serverOffline', 'opus-128')", []).unwrap();
+        secrets::set(&conn, &secret_key(1), "pw").unwrap();
+        forget_client(1);
+        apply(&mut conn, 1, &pulled(vec![song("a", "One", "Al")])).unwrap();
+        conn.execute("UPDATE remote_tracks SET state = 'downloading'", []).unwrap();
+        download_next(&conn).unwrap();
+        let log = log.lock().unwrap();
+        let (ep, q) = log.last().unwrap();
+        assert_eq!((ep.as_str(), q["format"][0].as_str(), q["maxBitRate"][0].as_str()), ("stream", "opus", "128"));
     }
 
     #[test]

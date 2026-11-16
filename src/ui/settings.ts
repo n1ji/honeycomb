@@ -8,7 +8,7 @@ import { openColumnsCustomizer, openPlayerBarCustomizer, setLayoutSetting } from
 import { openImporter } from "./importer";
 import { Mode, mode, setMode } from "./mode";
 import { pluginsSection } from "./pluginsettings";
-import { openAddServer, serverRows, streamQuality } from "./servers";
+import { openAddServer, serverQuality, serverRows } from "./servers";
 
 export const ACCENTS = ["#f5a623", "#e8590c", "#e03131", "#d6336c", "#ae3ec9", "#4c6ef5", "#1c7ed6", "#0ca678", "#74b816"];
 
@@ -353,7 +353,7 @@ export async function openSettings() {
       store.emit("tracks");
     }
     const servers = await serverRows(renderFolders);
-    serverOptions.replaceChildren(...(servers.length ? [streamQuality(setSetting)] : []));
+    serverOptions.replaceChildren(...(servers.length ? serverQuality(setSetting) : []));
     folderList.replaceChildren(
       ...servers,
       ...(folders.length || servers.length
