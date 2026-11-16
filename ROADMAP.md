@@ -33,10 +33,10 @@ These come first, ahead of the month order below:
 1. 🚀 **Remember unreadable files (#6, #2).** *Live in 0.2.0.* What's left for #2: look at Settings → Library → Unreadable files on the Windows library to see why those 64 files fail.
 2. 🚀 **Show the loved flag.** *Live in 0.2.0.* Hearts in the track list, the track menu and Now Playing. Next step: loves sync with Last.fm (Month 2).
 3. 🔧 **Linux on release tags.** *Done on dev:* release tags now build the Linux packages too. The distro test was the AppImage's self-test on Debian 13 (debsrv, under xvfb): the UI loaded in WebKitGTK, scanning worked and all 5 formats decoded. Still open: scrolling feel and real audio on a Linux desktop.
-4. 🟡 **ReplayGain.** *On dev, still needs a listening test and a look at Settings → Playback; no pre-amp for untagged files yet.* Read track and album gain and peak tags, apply them in Kaseki's gain stage (switching exactly at the gapless marker), with a setting (Off / Track / Album), clipping prevention from the peak, and a line in the signal path view.
+4. 🔧 **ReplayGain.** *On dev; no pre-amp for untagged files yet.* Read track and album gain and peak tags, apply them in Kaseki's gain stage (switching exactly at the gapless marker), with a setting (Off / Track / Album), clipping prevention from the peak, and a line in the signal path view.
 5. **Watch library folders.** Use the `notify` crate to start the quick rescan a moment after files change, so new music lands in the Inbox without "Rescan now". If a scan is already running, run another one when it finishes.
-6. 🟡 **Album art grid view.** *On dev, as part of Listening mode:* a second interface made for playing music (album cover grid, artists, playlists, songs, album pages, a big Now Playing view), next to the current one, now called Advanced mode. Still open: cached cover thumbnails, so the grid loads small images instead of full-size covers.
-7. 🟡 **Listening mode.** *On dev, started 2026-11-15.* A second, simpler interface built around album art, Now Playing and lyrics. Today's interface becomes Advanced mode, a switch moves between them, and Sync works in both.
+6. 🔧 **Album art grid view.** *On dev, as part of Listening mode:* a second interface made for playing music (album cover grid, artists, playlists, songs, album pages, a big Now Playing view), next to the current one, now called Advanced mode. Still open: cached cover thumbnails, so the grid loads small images instead of full-size covers.
+7. 🔧 **Listening mode.** *On dev, started 2026-11-15.* A second, simpler interface built around album art, Now Playing and lyrics. Today's interface becomes Advanced mode, a switch moves between them, and Sync works in both.
 
 ## October 2026: done ahead of plan
 
@@ -70,13 +70,13 @@ Everything finished so far, including items that were planned for later months a
 
 ## Month 1 (November): ship something people can install
 
-- 🟡 **Decide:** public repo (since 2026-10-22) and keeping the name are decided; still open: when to buy the Apple Developer account.
+- 🔧 **Decide:** public repo (since 2026-10-22) and keeping the name are decided. When to buy the Apple Developer account moved to Later.
 - 🚀 Change the app identifier to `dev.n1ji.honeycomb` and move the existing library database across automatically.
-- 🟡 Linux: AppImage, .deb and .rpm are live in 0.2.0 🚀, release tags build them on their own 🔧, and the self-test passed on Debian 13. Still open: scrolling feel and real audio on a Linux desktop (WebKitGTK scrolling is the main risk).
+- 🔧 Linux: AppImage, .deb and .rpm are live in 0.2.0, release tags build them on their own, and the self-test passed on Debian 13. Trying it on a Linux desktop moved to Later.
 - 🚀 Built-in auto-updater (Tauri updater with a signing key), live in 0.2.0. The first real test is updating 0.2.0 to the next release.
 - 🚀 A download page (honeycomb.n1ji.dev).
 - 🚀 Performance baseline: 100k-track library, see `docs/perf-baseline.md` (startup 0.95 s, search ~65 ms, sort ~70 ms).
-- 🟡 Fix: removing the playing track stops playback (#4), and audio dies when headphones are unplugged (#5). Fixed in code and live in 0.1.1, still needs a listening test.
+- 🔧 Fix: removing the playing track stops playback (#4), and audio dies when headphones are unplugged (#5). Fixed in code (live since 0.1.1); the listening test moved to Later.
 
 **Done in November** (including items moved up from later months):
 
@@ -89,7 +89,7 @@ Everything finished so far, including items that were planned for later months a
 - 🔧 Folders that can't be reached during a scan (an unplugged drive, a sleeping network share) keep their songs, with their stats and playlist spots, instead of being dropped (not on the plan; known issues now listed in `docs/known-issues.md`).
 - 🔧 Plugins run in their own sandbox (plugin API 2): each one gets only what Honeycomb gives it, and bundled scrobbling works as before. Plugin authors: see `docs/plugins.md` for the small API 2 update. Checked on macOS; Windows and Linux still to try.
 - 🔧 Listening mode: a second interface for playing music (album cover grid, artists, playlists, songs, album pages, a big Now Playing view); the old one is now Advanced mode. Covers the album art grid (was Month 5). On dev.
-- 🟡 ReplayGain: track and album gain applied in Kaseki per track, Off / Track / Album setting (was Month 5). On dev, not tested by ear yet.
+- 🔧 ReplayGain: track and album gain applied in Kaseki per track, Off / Track / Album setting (was Month 5).
 
 **Done when:** a stranger can download an alpha for Mac or Linux, install it, and receive the next update automatically.
 
@@ -163,6 +163,12 @@ Kept to what 1.0 needs. Nice-to-haves moved to "Later"; drag to reorder was done
 ## Later (not in these 6 months)
 
 Online tag and artwork lookup, automatic file renaming and organizing, theme files and custom CSS, saved layout profiles, podcasts, internet radio, CD ripping.
+
+Open questions and checks, moved here from Month 1:
+
+- When to buy the Apple Developer account (needed for signed Mac builds).
+- Linux on a real desktop: scrolling feel (WebKitGTK is the main risk) and real audio.
+- Listening tests: #3, #4, #5, and ReplayGain on a full album.
 
 Moved here from April to keep 1.0 manageable:
 
