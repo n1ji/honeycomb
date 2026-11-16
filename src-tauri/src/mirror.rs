@@ -899,6 +899,71 @@ pub fn download_next(conn: &Connection) -> Result<Option<i64>> {
     Ok(Some(track_id))
 }
 
+/// A server song headed for a device sync folder.
+pub struct Remote {
+    pub source: i64,
+    client: Client,
+    rid: String,
+    transcode: Option<(String, u32)>,
+    /// The extension of what arrives.
+    pub ext: String,
+    /// Its size on the server, and what the manifest records it as.
+    pub size: u64,
+    pub key: String,
+    pub kbps: Option<u32>,
+}
+
+/// How a server song is fetched for a sync: the original when `original` (the
+/// device converts it itself), else at the "Keep offline as" quality.
+pub fn remote_for_sync(conn: &Connection, track_id: i64, original: bool) -> Result<Option<Remote>> {
+    let Some((source, rid, suffix, size)) = conn
+        .query_row("SELECT source_id, remote_id, suffix, COALESCE(size, 0) FROM remote_tracks WHERE track_id = ?1", [track_id], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, i64>(3)?))
+        })
+        .optional()?
+    else {
+        return Ok(None);
+    };
+    let transcode = if original { None } else { transcode(conn, "serverOffline") };
+    let (ext, key) = match &transcode {
+        Some((fmt, kbps)) => (fmt.clone(), format!("server-{fmt}{kbps}")),
+        None => (ext_or(&suffix).to_ascii_lowercase(), "server".to_string()),
+    };
+    let kbps = transcode.as_ref().map(|t| t.1);
+    Ok(Some(Remote { source, client: client(conn, source)?, rid, transcode, ext, size: size.max(0) as u64, key, kbps }))
+}
+
+/// Whether the server of `r` answers at all, checked once before a sync.
+pub fn reachable(r: &Remote) -> bool {
+    r.client.ping().is_ok()
+}
+
+/// Download `r` into `out`.
+pub fn fetch(r: &Remote, out: &mut impl std::io::Write, cancel: &std::sync::atomic::AtomicBool) -> Result<u64> {
+    let req = match &r.transcode {
+        Some((fmt, kbps)) => r.client.stream(&r.rid, Some((fmt, *kbps))),
+        None => r.client.download(&r.rid),
+    };
+    let resp = req.call().map_err(|e| anyhow!("{}", crate::subsonic::describe(&e)))?;
+    if resp.content_type().contains("json") || resp.content_type().contains("xml") {
+        bail!("The server refused to send it");
+    }
+    let mut body = resp.into_reader();
+    let mut buf = vec![0u8; 1 << 16];
+    let mut total = 0u64;
+    loop {
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            bail!("cancelled");
+        }
+        let n = body.read(&mut buf).context("The download broke off")?;
+        if n == 0 {
+            return Ok(total);
+        }
+        out.write_all(&buf[..n])?;
+        total += n as u64;
+    }
+}
+
 fn ext_or(suffix: &str) -> &str {
     if suffix.is_empty() { "bin" } else { suffix }
 }
@@ -920,6 +985,7 @@ fn stream_cache_path(source: i64, rid: &str, suffix: &str, transcode: Option<&(S
 }
 
 struct Playable {
+    track_id: i64,
     source: i64,
     rid: String,
     suffix: String,
@@ -928,13 +994,13 @@ struct Playable {
 
 fn playable(conn: &Connection, path: &str) -> Result<Playable> {
     let (source, rid) = parse_path(path).ok_or_else(|| anyhow!("not a server song"))?;
-    let (suffix, file) = conn
-        .query_row("SELECT suffix, file FROM remote_tracks WHERE source_id = ?1 AND remote_id = ?2", params![source, rid], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
+    let (track_id, suffix, file) = conn
+        .query_row("SELECT track_id, suffix, file FROM remote_tracks WHERE source_id = ?1 AND remote_id = ?2", params![source, rid], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?))
         })
         .optional()?
         .ok_or_else(|| anyhow!("This song isn't in the library any more"))?;
-    Ok(Playable { source, rid: rid.to_string(), suffix, file })
+    Ok(Playable { track_id, source, rid: rid.to_string(), suffix, file })
 }
 
 /// Kaseki's opener for server songs: the offline copy when there is one, else
@@ -966,7 +1032,16 @@ fn open_audio(path: &str) -> Result<(Box<dyn symphonia::core::io::MediaSource>, 
         Some((fmt, _)) => fmt.clone(),
         None => p.suffix.to_ascii_lowercase(),
     };
-    let opened = stream::open(&cache, || client.stream(&p.rid, tc.as_ref().map(|(f, k)| (f.as_str(), *k))))?;
+    let opened = match stream::open(&cache, || client.stream(&p.rid, tc.as_ref().map(|(f, k)| (f.as_str(), *k)))) {
+        Ok(o) => o,
+        Err(e) => {
+            // The server can't be reached: a sync folder may have a copy.
+            let copy = db::open(&c.db_path).ok().and_then(|conn| crate::sync::local_copy(&conn, p.track_id));
+            let Some(f) = copy.and_then(|f| Some((fs::File::open(&f).ok()?, f))) else { return Err(e.into()) };
+            let ext = f.1.extension().and_then(|e| e.to_str()).unwrap_or(&p.suffix).to_ascii_lowercase();
+            return Ok((Box::new(f.0), ext));
+        }
+    };
     Ok(match opened {
         Opened::File(f) => (Box::new(f), ext),
         Opened::Stream(r) => (Box::new(r), ext),

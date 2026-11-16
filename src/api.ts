@@ -211,6 +211,8 @@ export interface SyncProfile {
   removeUnselected: boolean;
   /** Convert lossless files to this; missing or null copies everything as it is. */
   convert?: SyncConvert | null;
+  /** Sync again after each server sync. Missing until the destination has been looked at. */
+  autoUpdate?: boolean;
 }
 
 export interface SyncTarget {
@@ -218,6 +220,8 @@ export interface SyncTarget {
   rockbox: boolean;
   freeBytes: number | null;
   syncedFiles: number;
+  /** On this computer's own disk, not a removable drive. */
+  local: boolean;
 }
 
 export interface SyncReport {

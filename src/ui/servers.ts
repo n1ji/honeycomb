@@ -148,6 +148,6 @@ export function serverQuality(setSetting: (k: string, v: string) => Promise<void
   };
   return [
     pick("serverStream", "Stream from servers", "Lower quality saves data away from home. The server converts the music, so changes between songs may not be gapless."),
-    pick("serverOffline", "Keep offline as", "Smaller copies fit more albums on a laptop. Applies to albums kept offline from now on; the server does the converting."),
+    pick("serverOffline", "Keep offline as", "For albums kept offline and server songs synced to a folder or device (unless the sync converts them itself). Smaller copies fit more music; the server does the converting, and copies made before stay as they are."),
   ];
 }

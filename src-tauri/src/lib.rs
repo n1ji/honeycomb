@@ -501,6 +501,8 @@ struct SyncTarget {
     free_bytes: Option<u64>,
     /// Tracks a previous sync put there.
     synced_files: usize,
+    /// On this computer's own disk (not a removable drive).
+    local: bool,
 }
 
 #[tauri::command(async)]
@@ -516,22 +518,33 @@ fn sync_target(dest: String) -> SyncTarget {
         rockbox: sync::rockbox_root(dest).is_some(),
         free_bytes: fs2::available_space(dest).ok(),
         synced_files,
+        local: sync::on_this_computer(dest),
+    }
+}
+
+/// After a server sync: refresh the sync folders on this computer that ask
+/// for it, so new server music lands there by itself.
+pub(crate) fn update_sync_folders(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let Ok(conn) = db::open(&state.db_path) else { return };
+    for p in sync::profiles(&conn).into_iter().filter(|p| p.auto_update && Path::new(&p.dest).is_dir()) {
+        // A sync someone started wins; this one waits for the next server sync.
+        let Some(_running) = sync::begin() else { return };
+        state.sync_cancel.store(false, std::sync::atomic::Ordering::SeqCst);
+        let resolve = |id| resolve_playlist(&conn, id).map_err(anyhow::Error::msg);
+        match sync::run(&conn, &p, &resolve, &|_| {}, &state.sync_cancel) {
+            Ok(r) if r.copied > 0 => {
+                let _ = app.emit("sync-folder-updated", serde_json::json!({ "dest": p.dest, "copied": r.copied }));
+            }
+            Ok(_) => {}
+            Err(e) => eprintln!("sync: updating {}: {e:#}", p.dest),
+        }
     }
 }
 
 #[tauri::command]
 async fn sync_run(app: AppHandle, profile: sync::Profile) -> CmdResult<sync::Report> {
-    static RUNNING: AtomicBool = AtomicBool::new(false);
-    struct Done;
-    impl Drop for Done {
-        fn drop(&mut self) {
-            RUNNING.store(false, std::sync::atomic::Ordering::SeqCst);
-        }
-    }
-    if RUNNING.swap(true, std::sync::atomic::Ordering::SeqCst) {
-        return Err("A sync is already running. Open Sync to see how it's going.".into());
-    }
-    let done = Done;
+    let done = sync::begin().ok_or("A sync is already running. Open Sync to see how it's going.")?;
     tauri::async_runtime::spawn_blocking(move || {
         let _done = done;
         let state = app.state::<AppState>();

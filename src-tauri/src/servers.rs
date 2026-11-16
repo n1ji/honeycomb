@@ -134,6 +134,7 @@ fn spawn_sync(app: AppHandle, id: i64, quiet: bool) {
                 // Playlists aren't in the fingerprint, so a sync someone asked for always reloads.
                 if changed || !quiet {
                     let _ = app.emit("library-changed", ());
+                    crate::update_sync_folders(&app);
                 }
                 mirror::poke();
                 match mirror::cache_covers(&conn, id) {

@@ -105,6 +105,7 @@ pub(crate) fn scan(db_path: &Path, progress: &dyn Fn(Progress)) -> Result<Finish
     // under them is dropped from the library.
     let mut unreachable: Vec<PathBuf> = Vec::new();
     let mut files: Vec<PathBuf> = Vec::new();
+    let mut synced: Vec<PathBuf> = Vec::new();
     for folder in &folders {
         let root = Path::new(folder);
         // A drive that isn't plugged in, or a share that's offline.
@@ -115,6 +116,7 @@ pub(crate) fn scan(db_path: &Path, progress: &dyn Fn(Progress)) -> Result<Finish
         let mut found = 0;
         for entry in WalkDir::new(root).follow_links(true) {
             match entry {
+                Ok(e) if e.file_name() == crate::sync::MANIFEST => synced.extend(e.path().parent().map(crate::sync::synced_files).unwrap_or_default()),
                 Ok(e) if e.file_type().is_file() && meta::is_audio(e.path()) => {
                     found += 1;
                     let p = e.into_path();
@@ -133,6 +135,11 @@ pub(crate) fn scan(db_path: &Path, progress: &dyn Fn(Progress)) -> Result<Finish
         if found == 0 && known.keys().any(|p| Path::new(p).starts_with(root)) {
             unreachable.push(root.to_path_buf());
         }
+    }
+    // Copies a sync wrote are the library's own songs again, not new ones.
+    if !synced.is_empty() {
+        let synced: HashSet<PathBuf> = synced.into_iter().collect();
+        files.retain(|f| !synced.contains(f));
     }
     let kept = |p: &str| unreachable.iter().any(|u| Path::new(p).starts_with(u));
 
@@ -409,6 +416,29 @@ mod tests {
             .filter(|t| t.inbox)
             .map(|t| Path::new(&t.path).file_name().unwrap().to_string_lossy().into_owned())
             .collect()
+    }
+
+    #[test]
+    fn songs_a_sync_wrote_inside_a_music_folder_arent_added_twice() {
+        let root = std::env::temp_dir().join(format!("hc-synced-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let dest = root.join("Offline");
+        std::fs::create_dir_all(dest.join("Al")).unwrap();
+        write_wav(&root.join("mine.wav"));
+        write_wav(&dest.join("Al").join("copy.wav"));
+        write_wav(&dest.join("own.wav"));
+        let manifest = r#"{"files":{"Al/copy.wav":{"trackId":1,"size":1,"mtime":0}}}"#;
+        std::fs::write(dest.join(crate::sync::MANIFEST), manifest).unwrap();
+        let db_path = root.join("library.db");
+        let conn = db::open(&db_path).unwrap();
+        db::migrate(&conn).unwrap();
+        conn.execute("INSERT INTO folders (path) VALUES (?1)", [root.to_string_lossy()]).unwrap();
+        scan(&db_path, &|_| {}).unwrap();
+        let mut names: Vec<String> =
+            db::all_tracks(&conn).unwrap().iter().map(|t| Path::new(&t.path).file_name().unwrap().to_string_lossy().into_owned()).collect();
+        names.sort();
+        assert_eq!(names, ["mine.wav", "own.wav"], "the synced copy is left out, files of your own there aren't");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

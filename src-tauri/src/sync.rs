@@ -60,6 +60,61 @@ pub struct Profile {
     /// Convert lossless files to this; None copies everything as it is.
     #[serde(default)]
     pub convert: Option<Convert>,
+    /// Run again after each server sync, so new server music lands here (folders on this computer).
+    #[serde(default)]
+    pub auto_update: bool,
+}
+
+/// The saved sync profiles (`sync.profiles`, written by the Sync window).
+pub fn profiles(conn: &Connection) -> Vec<Profile> {
+    conn.query_row("SELECT value FROM settings WHERE key = 'sync.profiles'", [], |r| r.get::<_, String>(0))
+        .ok()
+        .and_then(|j| serde_json::from_str(&j).ok())
+        .unwrap_or_default()
+}
+
+/// Whether `dest` is on this computer's own disk rather than a removable drive.
+// shortcut: judged by where the OS mounts external drives; a second internal disk counts as removable.
+pub fn on_this_computer(dest: &Path) -> bool {
+    if cfg!(target_os = "macos") {
+        !dest.starts_with("/Volumes")
+    } else if cfg!(windows) {
+        let drive = |p: &Path| p.components().next().map(|c| c.as_os_str().to_ascii_lowercase());
+        std::env::var_os("USERPROFILE").is_some_and(|home| drive(Path::new(&home)) == drive(dest))
+    } else {
+        !["/media", "/run/media", "/mnt"].iter().any(|r| dest.starts_with(r))
+    }
+}
+
+/// Files a sync put in `dir`, if it's a sync destination. The scanner leaves
+/// them out, so a destination inside a music folder doesn't list songs twice.
+pub fn synced_files(dir: &Path) -> Vec<PathBuf> {
+    load_manifest(dir).files.keys().map(|rel| native(dir, rel)).collect()
+}
+
+/// A copy of `track_id` in a sync folder that's reachable now, for playing a
+/// server song while its server isn't.
+pub fn local_copy(conn: &Connection, track_id: i64) -> Option<PathBuf> {
+    profiles(conn).iter().map(|p| Path::new(&p.dest)).filter(|d| d.is_dir()).find_map(|dest| {
+        let m = load_manifest(dest);
+        let rel = m.files.iter().find(|(_, e)| e.track_id == track_id)?.0;
+        Some(native(dest, rel)).filter(|f| f.is_file() && inside(dest, f))
+    })
+}
+
+static RUNNING: AtomicBool = AtomicBool::new(false);
+
+/// Held while a sync runs; only one runs at a time.
+pub struct Running;
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        RUNNING.store(false, Ordering::SeqCst);
+    }
+}
+
+pub fn begin() -> Option<Running> {
+    (!RUNNING.swap(true, Ordering::SeqCst)).then_some(Running)
 }
 
 /// An album, told apart from same-named ones by its artist (album artist, else track artist).
@@ -184,13 +239,14 @@ fn conversion(p: &Profile, t: &Track) -> Option<Convert> {
 }
 
 /// Give each track its own path; FAT compares names without case.
-fn assign_paths(tracks: &[Track], convs: &[Option<Convert>]) -> Vec<String> {
+/// `exts` replaces a track's own extension (converted, or from a server).
+fn assign_paths(tracks: &[Track], exts: &[Option<&str>]) -> Vec<String> {
     let mut used: HashSet<String> = HashSet::new();
     tracks
         .iter()
-        .zip(convs)
-        .map(|(t, c)| {
-            let base = track_path(t, c.map(|c| c.ext()));
+        .zip(exts)
+        .map(|(t, e)| {
+            let base = track_path(t, *e);
             let mut p = base.clone();
             let mut n = 2;
             while !used.insert(p.to_lowercase()) {
@@ -378,12 +434,12 @@ pub fn selection(conn: &Connection, p: &Profile, resolve: &dyn Fn(i64) -> Result
     Ok((tracks, lists))
 }
 
-fn copy_file(src: &Path, dst: &Path, cancel: &AtomicBool) -> Result<u64> {
+/// Write `dst` through a fresh `.part` file that `fill` writes into.
+fn write_via_part(dst: &Path, fill: impl FnOnce(&mut fs::File) -> Result<u64>) -> Result<u64> {
     if let Some(dir) = dst.parent() {
         fs::create_dir_all(dir)?;
     }
     let part = dst.with_file_name(format!("{}.part", dst.file_name().unwrap_or_default().to_string_lossy()));
-    let mut input = fs::File::open(src).with_context(|| format!("reading {}", src.display()))?;
     // A leftover `.part` is removed, not opened: it could link elsewhere.
     let _ = fs::remove_file(&part);
     let mut out = fs::OpenOptions::new()
@@ -391,25 +447,36 @@ fn copy_file(src: &Path, dst: &Path, cancel: &AtomicBool) -> Result<u64> {
         .create_new(true)
         .open(&part)
         .with_context(|| format!("writing {}", part.display()))?;
-    let mut buf = vec![0u8; 1 << 20];
-    let mut total = 0u64;
-    loop {
-        if cancel.load(Ordering::Relaxed) {
+    let total = match fill(&mut out).and_then(|n| Ok(out.sync_all().map(|_| n)?)) {
+        Ok(n) => n,
+        Err(e) => {
             drop(out);
             let _ = fs::remove_file(&part);
-            bail!("cancelled");
+            return Err(e);
         }
-        let n = input.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        out.write_all(&buf[..n])?;
-        total += n as u64;
-    }
-    out.sync_all()?;
+    };
     drop(out);
     fs::rename(&part, dst)?;
     Ok(total)
+}
+
+fn copy_file(src: &Path, dst: &Path, cancel: &AtomicBool) -> Result<u64> {
+    let mut input = fs::File::open(src).with_context(|| format!("reading {}", src.display()))?;
+    write_via_part(dst, |out| {
+        let mut buf = vec![0u8; 1 << 20];
+        let mut total = 0u64;
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                bail!("cancelled");
+            }
+            let n = input.read(&mut buf)?;
+            if n == 0 {
+                return Ok(total);
+            }
+            out.write_all(&buf[..n])?;
+            total += n as u64;
+        }
+    })
 }
 
 /// One file to put on the device.
@@ -420,6 +487,10 @@ struct Job<'a> {
     size: u64,
     mtime: i64,
     conv: Option<Convert>,
+    /// Set for a song only on a server, which is downloaded.
+    remote: Option<&'a crate::mirror::Remote>,
+    /// What the manifest records it as (`Entry::conv`).
+    key: String,
     /// Bytes it's expected to take on the device.
     estimate: u64,
 }
@@ -430,13 +501,31 @@ fn write_one(dest: &Path, job: &Job, cancel: &AtomicBool) -> Result<u64> {
     if !inside(dest, &target) {
         bail!("{} leads outside the destination", target.display());
     }
-    let Some(conv) = job.conv else { return copy_file(Path::new(&job.track.path), &target, cancel) };
+    let Some(conv) = job.conv else {
+        return match job.remote {
+            Some(r) => write_via_part(&target, |out| crate::mirror::fetch(r, out, cancel)),
+            None => copy_file(Path::new(&job.track.path), &target, cancel),
+        };
+    };
     if let Some(dir) = target.parent() {
         fs::create_dir_all(dir)?;
     }
+    // A server song is downloaded next to its spot first, then converted from there.
+    let fetched = target.with_file_name(format!("{}.download", target.file_name().unwrap_or_default().to_string_lossy()));
+    let src = match job.remote {
+        Some(r) => {
+            write_via_part(&fetched, |out| crate::mirror::fetch(r, out, cancel))?;
+            fetched.clone()
+        }
+        None => PathBuf::from(&job.track.path),
+    };
     let part = target.with_file_name(format!("{}.part", target.file_name().unwrap_or_default().to_string_lossy()));
     let _ = fs::remove_file(&part);
-    match convert::convert(Path::new(&job.track.path), &part, conv, cancel) {
+    let result = convert::convert(&src, &part, conv, cancel);
+    if job.remote.is_some() {
+        let _ = fs::remove_file(&fetched);
+    }
+    match result {
         Ok(bytes) => {
             fs::rename(&part, &target)?;
             Ok(bytes)
@@ -491,34 +580,63 @@ pub fn run(
     }
 
     let (tracks, lists) = selection(conn, p, resolve)?;
+    // Songs only on a server are downloaded straight into place.
+    let mut remote: HashMap<i64, crate::mirror::Remote> = HashMap::new();
     let tracks: Vec<Track> = tracks
         .into_iter()
         .filter_map(|t| match crate::mirror::local_file(conn, &t) {
             Some(f) => Some(Track { path: f.to_string_lossy().into_owned(), ..t }),
-            None => {
-                report.failed.push(format!("{} - {}: on the server only; make it available offline to sync it", t.artist, t.title));
-                None
-            }
+            None => match crate::mirror::remote_for_sync(conn, t.id, p.convert.is_some()) {
+                Ok(Some(r)) => {
+                    remote.insert(t.id, r);
+                    Some(t)
+                }
+                Ok(None) => None,
+                Err(e) => {
+                    report.failed.push(format!("{} - {}: {e:#}", t.artist, t.title));
+                    None
+                }
+            },
         })
         .collect();
+    let (mut checked, mut offline) = (HashSet::new(), HashSet::new());
+    for r in remote.values() {
+        if checked.insert(r.source) && !crate::mirror::reachable(r) {
+            offline.insert(r.source);
+        }
+    }
+    let tracks: Vec<Track> = if offline.is_empty() {
+        tracks
+    } else {
+        let before = tracks.len();
+        let kept: Vec<Track> = tracks.into_iter().filter(|t| remote.get(&t.id).is_none_or(|r| !offline.contains(&r.source))).collect();
+        report.failed.push(format!("{} server songs were skipped: the server can't be reached right now", before - kept.len()));
+        kept
+    };
     let convs: Vec<Option<Convert>> = tracks.iter().map(|t| conversion(p, t)).collect();
-    let paths = assign_paths(&tracks, &convs);
+    let exts: Vec<Option<&str>> = tracks
+        .iter()
+        .zip(&convs)
+        .map(|(t, c)| c.map(|c| c.ext()).or_else(|| remote.get(&t.id).map(|r| r.ext.as_str())))
+        .collect();
+    let paths = assign_paths(&tracks, &exts);
     let wanted: HashSet<&str> = paths.iter().map(String::as_str).collect();
 
     // What needs copying or converting, and what may be removed.
     let mut todo = Vec::new();
     for ((t, rel), conv) in tracks.iter().zip(&paths).zip(&convs) {
-        let src = fs::metadata(&t.path);
-        let (size, mtime) = match &src {
-            Ok(md) => (md.len(), crate::meta::file_mtime(Path::new(&t.path))),
-            Err(e) => {
+        let r = remote.get(&t.id);
+        let (size, mtime) = match (r, fs::metadata(&t.path)) {
+            (Some(r), _) => (r.size, 0),
+            (None, Ok(md)) => (md.len(), crate::meta::file_mtime(Path::new(&t.path))),
+            (None, Err(e)) => {
                 report.failed.push(format!("{}: {e}", t.path));
                 continue;
             }
         };
         let target = native(&dest, rel);
         let have = fs::metadata(&target).ok();
-        let key = conv.map(|c| c.key()).unwrap_or_default();
+        let key = conv.map(|c| c.key()).or_else(|| r.map(|r| r.key.clone())).unwrap_or_default();
         let current = m.files.get(rel).is_some_and(|e| {
             e.track_id == t.id
                 && e.size == size
@@ -530,14 +648,18 @@ pub fn run(
             report.unchanged += 1;
         } else if have.is_some()
             && !m.files.contains_key(rel)
-            && (conv.is_some() || have.as_ref().map(|md| md.len()) != Some(size))
+            && (conv.is_some() || r.is_some() || have.as_ref().map(|md| md.len()) != Some(size))
         {
             // Someone else's file is in the way; never overwrite it.
             report.failed.push(format!("{}: a different file is already there", target.display()));
         } else {
             // Converted files are estimated from their length.
-            let estimate = conv.map_or(size, |c| (t.duration * c.bytes_per_sec() as f64) as u64);
-            todo.push(Job { track: t, rel: rel.clone(), size, mtime, conv: *conv, estimate });
+            let estimate = match (conv, r.and_then(|r| r.kbps)) {
+                (Some(c), _) => (t.duration * c.bytes_per_sec() as f64) as u64,
+                (None, Some(kbps)) => (t.duration * kbps as f64 * 125.0) as u64,
+                (None, None) => size,
+            };
+            todo.push(Job { track: t, rel: rel.clone(), size, mtime, conv: *conv, remote: r, key, estimate });
         }
     }
     // Files a previous sync put there that aren't wanted now: with "remove
@@ -626,11 +748,10 @@ pub fn run(
                 Ok(bytes) => {
                     report.copied += 1;
                     report.bytes_copied += bytes;
-                    let conv = job.conv.map(|c| c.key()).unwrap_or_default();
-                    let out_size = job.conv.map(|_| bytes);
+                    let out_size = (job.conv.is_some() || job.remote.is_some()).then_some(bytes);
                     m.files.insert(
                         job.rel.clone(),
-                        Entry { track_id: job.track.id, size: job.size, mtime: job.mtime, conv, out_size },
+                        Entry { track_id: job.track.id, size: job.size, mtime: job.mtime, conv: job.key.clone(), out_size },
                     );
                 }
                 Err(_) if cancel.load(Ordering::Relaxed) => report.cancelled = true,

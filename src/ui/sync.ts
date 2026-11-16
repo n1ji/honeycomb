@@ -25,6 +25,10 @@ async function saveProfile(p: SyncProfile) {
   await api.setSetting(SETTING, store.settings[SETTING]);
 }
 
+listen<{ dest: string; copied: number }>("sync-folder-updated", (e) =>
+  toast(`${plural(e.payload.copied, "new song")} synced to ${e.payload.dest.split(/[\\/]/).pop()}.`),
+);
+
 /** The sync in progress, shared by every Sync window and button. */
 let running: { dest: string; done: number; total: number; current: string } | null = null;
 /** The open window that shows it, if any. */
@@ -82,6 +86,8 @@ export function openSync(pick?: SyncPick) {
   const whole = h("input", { type: "checkbox" });
   const remove = h("input", { type: "checkbox" });
   const convertOn = h("input", { type: "checkbox" });
+  const autoUpdate = h("input", { type: "checkbox" });
+  const autoField = h("label", { class: "check" }, autoUpdate, "Update after server syncs, so new music from your servers lands here by itself");
   const format = h(
     "select",
     { class: "input" },
@@ -118,6 +124,10 @@ export function openSync(pick?: SyncPick) {
       return;
     }
     const t = await api.syncTarget(p.dest);
+    // A folder on this computer keeps up with the servers unless told otherwise.
+    if (p.autoUpdate === undefined) p.autoUpdate = t.exists && t.local;
+    autoUpdate.checked = p.autoUpdate;
+    show(autoField, t.local || p.autoUpdate);
     destInfo.textContent = !t.exists
       ? "Not connected right now."
       : [
@@ -198,12 +208,16 @@ export function openSync(pick?: SyncPick) {
     renderLists();
   });
   remove.addEventListener("change", () => (p.removeUnselected = remove.checked));
+  autoUpdate.addEventListener("change", () => {
+    p.autoUpdate = autoUpdate.checked;
+    run(() => saveProfile(p));
+  });
 
   const chooseDest = () =>
     run(async () => {
       const dir = await open({ directory: true, multiple: false, title: "Where should the music go?" });
       if (typeof dir !== "string") return;
-      p = withPick(savedProfiles().find((q) => q.dest === dir) ?? { ...p, dest: dir }, pick);
+      p = withPick(savedProfiles().find((q) => q.dest === dir) ?? { ...p, dest: dir, autoUpdate: undefined }, pick);
       renderLists();
       await describeDest();
     });
@@ -231,6 +245,7 @@ export function openSync(pick?: SyncPick) {
       lists,
       groups,
       h("label", { class: "check" }, remove, "Remove synced files that are no longer chosen"),
+      autoField,
       h("h3", {}, "Converting"),
       h("label", { class: "check" }, convertOn, "Convert lossless files to save space or suit the player"),
       convertOptions,
