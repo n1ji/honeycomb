@@ -984,6 +984,7 @@ impl<R: Runtime> Engine<R> {
         if playing && !l.announced {
             l.announced = true;
             let _ = self.app.emit("player-now-playing", serde_json::json!({ "trackId": l.track_id }));
+            crate::mirror::now_playing(l.track_id);
         }
         let delta = pos - l.last_pos;
         if playing && delta > 0.0 && delta < 2.0 {

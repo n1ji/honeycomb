@@ -643,6 +643,22 @@ pub fn note_play(conn: &Connection, track_id: i64, when: i64) -> Result<()> {
     Ok(())
 }
 
+/// Tell the song's server it started playing. Not queued: once the song is
+/// over there's nothing left to tell.
+pub fn now_playing(track_id: i64) {
+    let Ok(c) = ctx() else { return };
+    std::thread::spawn(move || {
+        let sent = (|| -> Result<()> {
+            let conn = db::open(&c.db_path)?;
+            let Some((source, rid)) = remote_of(&conn, track_id)? else { return Ok(()) };
+            client(&conn, source)?.now_playing(&rid)
+        })();
+        if let Err(e) = sent {
+            eprintln!("mirror: now playing: {e:#}");
+        }
+    });
+}
+
 pub fn queue_love(conn: &Connection, ids: &[i64], loved: bool) -> Result<()> {
     let mut any = false;
     for id in ids {

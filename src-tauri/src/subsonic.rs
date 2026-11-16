@@ -248,6 +248,11 @@ impl Client {
         self.call("setRating", &[("id", id), ("rating", &stars.min(5).to_string())]).map(drop)
     }
 
+    /// Shows the song in the server's "now playing" list; doesn't count a play.
+    pub fn now_playing(&self, id: &str) -> Result<()> {
+        self.call("scrobble", &[("id", id), ("submission", "false")]).map(drop)
+    }
+
     pub fn scrobble(&self, id: &str, played_at: i64) -> Result<()> {
         let ms = (played_at * 1000).to_string();
         self.call("scrobble", &[("id", id), ("time", &ms), ("submission", "true")]).map(drop)
@@ -424,6 +429,15 @@ pub(crate) mod tests {
     pub fn ok(extra: &str) -> String {
         let sep = if extra.is_empty() { "" } else { "," };
         format!(r#"{{"subsonic-response":{{"status":"ok","version":"1.16.1","type":"fake","openSubsonic":true{sep}{extra}}}}}"#)
+    }
+
+    #[test]
+    fn now_playing_is_not_a_play() {
+        let (url, log) = fake(Arc::new(|_, _| (200, ok(""))));
+        Client::new(&url, "ann", Auth::Password("pw".into())).now_playing("s1").unwrap();
+        let log = log.lock().unwrap();
+        assert_eq!(log[0].0, "scrobble");
+        assert_eq!((log[0].1["id"][0].as_str(), log[0].1["submission"][0].as_str()), ("s1", "false"));
     }
 
     #[test]
