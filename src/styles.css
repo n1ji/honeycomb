@@ -341,6 +341,7 @@ body {
 }
 
 .sidebar-footer {
+  container-type: inline-size;
   padding: 8px;
   border-top: 1px solid var(--border);
   display: flex;
@@ -363,6 +364,12 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   font-variant-numeric: tabular-nums;
+}
+
+@container (max-width: 230px) {
+  .sidebar-footer .label {
+    display: none;
+  }
 }
 
 /* Both glyphs in the same box, so ⚙ and ⇅ line up with each other and the text. */
@@ -1876,9 +1883,6 @@ input[type="color"] {
 @media (max-width: 760px) {
   #sidebar {
     width: 160px;
-  }
-  .sidebar-footer .label {
-    display: none;
   }
   #search {
     width: 140px;
