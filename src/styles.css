@@ -342,11 +342,11 @@ body {
 
 .sidebar-footer {
   container-type: inline-size;
-  padding: 8px;
+  padding: 8px 6px;
   border-top: 1px solid var(--border);
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
 }
 
 .sidebar-footer .icon-btn {
@@ -354,7 +354,9 @@ body {
   min-width: 0;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
+  padding: 6px;
+  font-size: 12px;
   white-space: nowrap;
 }
 
@@ -367,13 +369,13 @@ body {
 }
 
 /* Settings gives up its name first; Sync keeps its label longer since it shows progress. */
-@container (max-width: 190px) {
+@container (max-width: 150px) {
   .sidebar-footer .icon-btn:first-child .label {
     display: none;
   }
 }
 
-@container (max-width: 140px) {
+@container (max-width: 105px) {
   .sidebar-footer .label {
     display: none;
   }
@@ -390,6 +392,7 @@ body {
 
 .sidebar-footer .bulb {
   margin-left: auto;
+  width: 24px;
 }
 
 /* ---------- update bulb ---------- */
