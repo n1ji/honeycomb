@@ -354,8 +354,8 @@ body {
   min-width: 0;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 6px;
+  gap: 3px;
+  padding: 6px 4px;
   font-size: 12px;
   white-space: nowrap;
 }
@@ -369,13 +369,13 @@ body {
 }
 
 /* Settings gives up its name first; Sync keeps its label longer since it shows progress. */
-@container (max-width: 150px) {
+@container (max-width: 152px) {
   .sidebar-footer .icon-btn:first-child .label {
     display: none;
   }
 }
 
-@container (max-width: 105px) {
+@container (max-width: 106px) {
   .sidebar-footer .label {
     display: none;
   }
