@@ -367,7 +367,7 @@ body {
 }
 
 /* Settings gives up its name first; Sync keeps its label longer since it shows progress. */
-@container (max-width: 195px) {
+@container (max-width: 190px) {
   .sidebar-footer .icon-btn:first-child .label {
     display: none;
   }
