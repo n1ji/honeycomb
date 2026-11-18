@@ -366,7 +366,14 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-@container (max-width: 230px) {
+/* Settings gives up its name first; Sync keeps its label longer since it shows progress. */
+@container (max-width: 195px) {
+  .sidebar-footer .icon-btn:first-child .label {
+    display: none;
+  }
+}
+
+@container (max-width: 140px) {
   .sidebar-footer .label {
     display: none;
   }
