@@ -240,6 +240,21 @@ fn conversion(p: &Profile, t: &Track) -> Option<Convert> {
 
 /// Give each track its own path; FAT compares names without case.
 /// `exts` replaces a track's own extension (converted, or from a server).
+/// Server songs that are also in the selection as a local file (same artist and
+/// title, length within 2 s): the file is synced, the download skipped.
+fn server_twins(tracks: &[Track], is_remote: &dyn Fn(i64) -> bool) -> HashSet<i64> {
+    let key = |t: &Track| (t.artist.to_lowercase(), t.title.to_lowercase());
+    let mut local: HashMap<(String, String), Vec<f64>> = HashMap::new();
+    for t in tracks.iter().filter(|t| !is_remote(t.id)) {
+        local.entry(key(t)).or_default().push(t.duration);
+    }
+    tracks
+        .iter()
+        .filter(|t| is_remote(t.id) && local.get(&key(t)).is_some_and(|ds| ds.iter().any(|d| (d - t.duration).abs() < 2.0)))
+        .map(|t| t.id)
+        .collect()
+}
+
 fn assign_paths(tracks: &[Track], exts: &[Option<&str>]) -> Vec<String> {
     let mut used: HashSet<String> = HashSet::new();
     tracks
@@ -599,6 +614,9 @@ pub fn run(
             },
         })
         .collect();
+    let twins = server_twins(&tracks, &|id| remote.contains_key(&id));
+    remote.retain(|id, _| !twins.contains(id));
+    let tracks: Vec<Track> = tracks.into_iter().filter(|t| !twins.contains(&t.id)).collect();
     let (mut checked, mut offline) = (HashSet::new(), HashSet::new());
     for r in remote.values() {
         if checked.insert(r.source) && !crate::mirror::reachable(r) {
@@ -831,6 +849,14 @@ mod tests {
         ];
         let paths = assign_paths(&tracks, &[None, None, None]);
         assert_eq!(paths, ["Band/Album/01 Song.flac", "Band/Album/01 song (2).flac", "Band/Album/2-z.mp3"]);
+    }
+
+    #[test]
+    fn server_songs_with_a_local_file_arent_downloaded() {
+        let t = |id: i64, title: &str, duration: f64| Track { id, title: title.into(), artist: "MJ".into(), duration, ..Default::default() };
+        let tracks = [t(1, "Bad", 247.1), t(2, "bad", 247.0), t(3, "Speed Demon", 241.0), t(4, "Bad", 300.0)];
+        let twins = server_twins(&tracks, &|id| id != 1);
+        assert_eq!(twins, HashSet::from([2]));
     }
 
     fn setup(name: &str) -> (PathBuf, Connection, Vec<i64>) {
