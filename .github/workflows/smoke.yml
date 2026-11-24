@@ -2,9 +2,12 @@ name: Self-test
 
 # Builds the app on Linux and Windows and runs its self-test there, including
 # the plugin sandbox probes (WebKitGTK and WebView2 aren't covered on a Mac).
-# Run it by hand before a release.
+# Run it by hand before a release, or push dev to the self-test branch
+# (manual runs only work once this file is on main).
 on:
   workflow_dispatch:
+  push:
+    branches: [self-test]
 
 permissions:
   contents: read
