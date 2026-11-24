@@ -861,11 +861,11 @@ pub fn download_next(conn: &Connection) -> Result<Option<i64>> {
     let Some((track_id, source, rid, suffix)) = next else { return Ok(None) };
     let c = ctx()?;
     let tc = transcode(conn, "serverOffline");
-    let ext = tc.as_ref().map_or(ext_or(&suffix), |(fmt, _)| fmt.as_str());
+    let ext = ext_or(tc.as_ref().map_or(&suffix, |(fmt, _)| fmt));
     let dest = c.data_dir.join("offline").join(source.to_string()).join(format!("{}.{ext}", safe(&rid)));
     fs::create_dir_all(dest.parent().unwrap_or(&c.data_dir))?;
     // Played at the same quality already? Then the stream cache has it.
-    let cached = stream_cache_path(source, &rid, &suffix, tc.as_ref());
+    let cached = stream_cache_path(source, &rid, &suffix, tc.as_ref())?;
     if fs::rename(&cached, &dest).is_err() || !dest.is_file() {
         let client = client(conn, source)?;
         let request = match &tc {
@@ -964,8 +964,11 @@ pub fn fetch(r: &Remote, out: &mut impl std::io::Write, cancel: &std::sync::atom
     }
 }
 
+/// The server's file extension, if it's a plain one. It goes into file names,
+/// so anything else (`../`, slashes) becomes "bin".
 fn ext_or(suffix: &str) -> &str {
-    if suffix.is_empty() { "bin" } else { suffix }
+    let plain = !suffix.is_empty() && suffix.len() <= 5 && suffix.bytes().all(|b| b.is_ascii_alphanumeric());
+    if plain { suffix } else { "bin" }
 }
 
 /// The format and bitrate a setting asks the server to convert to (`serverStream`
@@ -976,12 +979,12 @@ fn transcode(conn: &Connection, key: &str) -> Option<(String, u32)> {
     Some((fmt.to_string(), kbps.parse().ok()?))
 }
 
-fn stream_cache_path(source: i64, rid: &str, suffix: &str, transcode: Option<&(String, u32)>) -> PathBuf {
-    let dir = CTX.get().map(|c| c.data_dir.join("stream-cache")).unwrap_or_default();
-    match transcode {
-        Some((fmt, kbps)) => dir.join(format!("{source}-{}-{fmt}{kbps}.{fmt}", safe(rid))),
+fn stream_cache_path(source: i64, rid: &str, suffix: &str, transcode: Option<&(String, u32)>) -> Result<PathBuf> {
+    let dir = ctx()?.data_dir.join("stream-cache");
+    Ok(match transcode {
+        Some((fmt, kbps)) => dir.join(format!("{source}-{}-{fmt}{kbps}.{}", safe(rid), ext_or(fmt))),
         None => dir.join(format!("{source}-{}.{}", safe(rid), ext_or(suffix))),
-    }
+    })
 }
 
 struct Playable {
@@ -1022,7 +1025,7 @@ fn open_audio(path: &str) -> Result<(Box<dyn symphonia::core::io::MediaSource>, 
         return Ok((Box::new(f), ext));
     }
     let tc = transcode(&conn, "serverStream");
-    let cache = stream_cache_path(p.source, &p.rid, &p.suffix, tc.as_ref());
+    let cache = stream_cache_path(p.source, &p.rid, &p.suffix, tc.as_ref())?;
     let client = client(&conn, p.source)?;
     drop(conn);
     if !cache.is_file() {
@@ -1063,7 +1066,7 @@ pub fn prefetch<'a>(paths: impl IntoIterator<Item = &'a str>) {
             }
             let tc = transcode(&conn, "serverStream");
             let Ok(client) = client(&conn, p.source) else { continue };
-            let cache = stream_cache_path(p.source, &p.rid, &p.suffix, tc.as_ref());
+            let Ok(cache) = stream_cache_path(p.source, &p.rid, &p.suffix, tc.as_ref()) else { continue };
             stream::prefetch(&cache, || client.stream(&p.rid, tc.as_ref().map(|(f, k)| (f.as_str(), *k))));
         }
     });
@@ -1195,6 +1198,9 @@ mod tests {
     use crate::subsonic::tests::{fake, ok};
     use std::sync::Arc;
 
+    /// Tests that talk to a fake server share the cached client for source 1.
+    static SERVER_TESTS: Mutex<()> = Mutex::new(());
+
     fn library() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
@@ -1308,6 +1314,7 @@ mod tests {
 
     #[test]
     fn a_song_the_server_wont_send_doesnt_hold_up_the_rest() {
+        let _one_at_a_time = SERVER_TESTS.lock().unwrap_or_else(|e| e.into_inner());
         let mut conn = library();
         let dir = std::env::temp_dir().join(format!("hc-refused-{}", std::process::id()));
         init(&dir.join("library.db"), &dir);
@@ -1329,6 +1336,7 @@ mod tests {
 
     #[test]
     fn offline_copies_can_be_converted_by_the_server() {
+        let _one_at_a_time = SERVER_TESTS.lock().unwrap_or_else(|e| e.into_inner());
         let mut conn = library();
         let dir = std::env::temp_dir().join(format!("hc-offline-opus-{}", std::process::id()));
         init(&dir.join("library.db"), &dir);
@@ -1347,6 +1355,7 @@ mod tests {
 
     #[test]
     fn the_outbox_sends_coalesces_and_retries() {
+        let _one_at_a_time = SERVER_TESTS.lock().unwrap_or_else(|e| e.into_inner());
         let mut conn = library();
         let fail = Arc::new(std::sync::atomic::AtomicBool::new(true));
         let f2 = fail.clone();
@@ -1442,6 +1451,15 @@ mod tests {
         assert_eq!(fs::read(&t.path).unwrap(), b"audio");
         assert!(db::folders(&conn).unwrap().contains(&keep.to_string_lossy().to_string()));
         assert_eq!(db::all_tracks(&conn).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_servers_file_extension_cant_leave_its_folder() {
+        assert_eq!(ext_or("flac"), "flac");
+        assert_eq!(ext_or(""), "bin");
+        for bad in ["../../Library/LaunchAgents/x.plist", "mp3/..", "a\\b", "toolong1"] {
+            assert_eq!(ext_or(bad), "bin", "{bad}");
+        }
     }
 
     #[test]

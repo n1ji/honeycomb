@@ -1,0 +1,64 @@
+name: Self-test
+
+# Builds the app on Linux and Windows and runs its self-test there, including
+# the plugin sandbox probes (WebKitGTK and WebView2 aren't covered on a Mac).
+# Run it by hand before a release.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ubuntu-24.04, windows-latest]
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libasound2-dev ffmpeg xvfb gnome-keyring dbus-x11
+
+      - name: ffmpeg (Windows)
+        if: runner.os == 'Windows'
+        run: choco install ffmpeg -y --no-progress
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+
+      - uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: src-tauri -> target
+
+      - run: npm ci
+      - run: npx tauri build --no-bundle
+
+      # No sound device on the runners, so playback checks are skipped. Linux
+      # gets a virtual display and a keyring for the plugin secrets check.
+      - name: Self-test (Linux)
+        if: runner.os == 'Linux'
+        env:
+          HONEYCOMB_SMOKE_NO_AUDIO: "1"
+        run: |
+          dbus-run-session -- bash -c 'echo "" | gnome-keyring-daemon --unlock --components=secrets >/dev/null;
+            xvfb-run -a scripts/smoke-test.sh src-tauri/target/release/honeycomb'
+
+      - name: Self-test (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          HONEYCOMB_SMOKE_NO_AUDIO: "1"
+        run: scripts/smoke-test.sh src-tauri/target/release/honeycomb.exe

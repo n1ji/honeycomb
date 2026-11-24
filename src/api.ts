@@ -269,6 +269,7 @@ export const api = {
   unreadableFiles: () => invoke<UnreadableFile[]>("unreadable_files"),
   /** Forget which files failed and rescan, so every one is read again. */
   retryUnreadable: () => invoke<void>("retry_unreadable"),
+  unwatchedFolders: () => invoke<[string, string][]>("unwatched_folders"),
   /** Songs in the listening history (what was played and how it ended). */
   listenCount: () => invoke<number>("listen_count"),
   clearListens: () => invoke<void>("clear_listens"),

@@ -520,8 +520,9 @@ fn write_one(dest: &Path, job: &Job, cancel: &AtomicBool) -> Result<u64> {
     if !inside(dest, &target) {
         bail!("{} leads outside the destination", target.display());
     }
-    // If replacing an existing file, free its space before writing the replacement.
-    if target.is_file() {
+    // The replacement goes in through a .part file, so the old one stays until
+    // it's done, unless the device is too full to hold both.
+    if target.is_file() && fs2::available_space(dest).is_ok_and(|free| free < job.estimate + (16 << 20)) {
         let _ = fs::remove_file(&target);
     }
     let Some(conv) = job.conv else {

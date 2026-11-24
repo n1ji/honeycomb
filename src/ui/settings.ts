@@ -283,6 +283,20 @@ async function openIgnored() {
   render();
 }
 
+/** Shown only when a folder couldn't be watched, so new music there needs "Rescan now". */
+function unwatchedNote(): HTMLElement {
+  const p = h("p", { class: "muted" });
+  p.style.display = "none";
+  void api.unwatchedFolders().then((list) => {
+    if (!list.length) return;
+    const names = list.map(([f]) => f).join(", ");
+    p.textContent = `New music in ${names} isn't noticed by itself (${list[0][1]}). Use Rescan now after adding songs there.`;
+    p.title = list.map(([f, e]) => `${f}: ${e}`).join("\n");
+    p.style.display = "";
+  });
+  return p;
+}
+
 /** "Unreadable files (N)…", shown only when there are some. */
 function unreadableButton(): HTMLElement {
   const b = button("Unreadable files…", () => run(openUnreadable));
@@ -472,6 +486,7 @@ export async function openSettings() {
         openImporter();
       }),
     ),
+    unwatchedNote(),
     serverOptions,
     h("p", { class: "muted" }, `${store.libraryCount().toLocaleString()} tracks in library. Honeycomb never moves or deletes your files.`),
     ...replayGainSection(),

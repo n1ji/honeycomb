@@ -18,6 +18,13 @@ const MAX_WAIT: Duration = Duration::from_secs(30);
 
 static WATCHER: LazyLock<Mutex<Option<RecommendedWatcher>>> = LazyLock::new(Default::default);
 static TX: LazyLock<Mutex<Option<mpsc::Sender<()>>>> = LazyLock::new(Default::default);
+/// Folders that are there but couldn't be watched (on Linux, usually the
+/// system's limit on watched folders), with the reason.
+static FAILED: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+
+pub fn failed() -> Vec<(String, String)> {
+    FAILED.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
 
 /// Start the rescan thread, then watch the folders.
 pub fn start(app: AppHandle) {
@@ -49,6 +56,8 @@ pub fn refresh(app: &AppHandle) {
     };
     let mut slot = WATCHER.lock().unwrap_or_else(|e| e.into_inner());
     *slot = None;
+    let mut failed = FAILED.lock().unwrap_or_else(|e| e.into_inner());
+    failed.clear();
     if folders.is_empty() {
         return;
     }
@@ -69,6 +78,9 @@ pub fn refresh(app: &AppHandle) {
         // A drive that isn't plugged in is skipped; the next scan says so.
         if let Err(e) = watcher.watch(Path::new(f), RecursiveMode::Recursive) {
             eprintln!("watch: {f}: {e}");
+            if Path::new(f).is_dir() {
+                failed.push((f.clone(), e.to_string()));
+            }
         }
     }
     *slot = Some(watcher);

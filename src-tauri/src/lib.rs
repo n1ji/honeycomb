@@ -188,6 +188,12 @@ fn unreadable_files(state: State<AppState>) -> CmdResult<Vec<UnreadableFile>> {
         .collect())
 }
 
+/// Library folders that new music isn't noticed in, with the reason.
+#[tauri::command]
+fn unwatched_folders() -> Vec<(String, String)> {
+    watch::failed()
+}
+
 /// Try every unreadable file again with a rescan.
 #[tauri::command]
 fn retry_unreadable(app: AppHandle, state: State<AppState>) -> CmdResult<()> {
@@ -894,6 +900,7 @@ pub fn run() {
             set_loved,
             unreadable_files,
             retry_unreadable,
+            unwatched_folders,
             clear_inbox,
             ignore_inbox_tracks,
             ignored_files,
