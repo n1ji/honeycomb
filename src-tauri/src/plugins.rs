@@ -230,6 +230,9 @@ pub fn serve(dirs: &Dirs, uri_path: &str) -> Response<Vec<u8>> {
         let file = resolve(dirs.dir_of(&id), &id, rest)?;
         Some((content_type(&file), std::fs::read(&file).ok()?))
     });
+    if crate::smoke::folder().is_some() {
+        eprintln!("plugin file: {uri_path} -> {}", if found.is_some() { "200" } else { "404" });
+    }
     let Some((mime, data)) = found else {
         return Response::builder().status(StatusCode::NOT_FOUND).body(Vec::new()).unwrap();
     };

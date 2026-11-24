@@ -84,6 +84,7 @@ kill "$watchdog" 2>/dev/null || true
 
 if [[ -f "$report" ]]; then
   cat "$report"
+  [[ $status == 0 ]] || grep -E "^plugin file:|[Pp]lugin" "$work/out.log" | tail -20 || true
 else
   echo "The app exited (status $status) without a report. Its output:"
   tail -40 "$work/out.log"
