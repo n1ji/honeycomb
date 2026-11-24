@@ -2,9 +2,36 @@
 
 Status: **proposal**, not built. This covers how Honeycomb on the desktop, Honeycomb on iOS and OpenSubsonic servers work together. It describes the code on `dev` as of 24 November 2026 and lists the known places where the plan and the code disagree.
 
+## Problem
+
+Honeycomb is a desktop player with the library on one computer. People who also listen on a phone, or keep their music on an OpenSubsonic server (Navidrome and others), have to use a different app there. Their playlists, ratings and play counts then live in two places and drift apart. Honeycomb already works as a client of a server (see What exists today). This document covers the rest: the desktop serving phones, a phone app, and keeping one set of playlists, ratings and play counts across all of them.
+
+## Goals and non-goals
+
+**Goals for v1**
+- One library state (playlists, stars, ratings, play counts) per setup, with every device reading and writing the same values.
+- Work with standard OpenSubsonic servers (Navidrome 0.64.2 is the reference), with clearly stated fallbacks where a server lacks the Honeycomb extension.
+- The desktop can serve paired phones on the home network.
+- Phones play offline, and their plays and ratings reach the state owner when they reconnect.
+- Never delete music without asking (see Connections in Settings → Library).
+
+**Non-goals for v1**
+- Third-party clients against Honeycomb's own server. It only accepts API keys issued by `pair`, behind a pinned self-signed certificate, so ordinary Subsonic apps can't connect, and that is accepted.
+- The desktop acting as a faster LAN copy of a server for phones. Phones in a server setup talk to the server.
+- A headless `honeycomb-server` (Docker). The server crate keeps it possible later (no Tauri dependency), but no phase builds it.
+- Two-way merging, tag editing for remote tracks, Android, a Navidrome plugin.
+
+## Terms
+
+- **Computer** or **desktop:** the machine running the Honeycomb desktop app.
+- **Server:** an OpenSubsonic server such as Navidrome. The desktop's own built-in server is always called **the desktop's server**.
+- **Song:** one track in the library. Code and endpoints say `track` and `song`; they mean the same thing.
+- **LAN:** the home network (same Wi-Fi or wired).
+- **Kaseki:** Honeycomb's audio engine (decoding, resampling, gapless playback).
+
 ## Principles
 
-1. **Every link between devices speaks OpenSubsonic.** There's no custom sync protocol. Anything the standard can't do goes into one Honeycomb extension, advertised through `getOpenSubsonicExtensions`. As a result, any OpenSubsonic server (Navidrome and others) works as a source with no extra code.
+1. **Every link between devices speaks OpenSubsonic.** There's no custom sync protocol. Anything the standard can't do goes into one Honeycomb extension, advertised through `getOpenSubsonicExtensions`. Any OpenSubsonic server can be a source. Where a server lacks something, Honeycomb falls back: legacy salted-token auth (C12), walking albums when an empty search returns nothing (C13), whole stars instead of half stars (C3), and standard `scrobble` instead of play totals (C5).
 2. **Roles, not devices.** Each app keeps a list of `Source`s, and sync, dedupe and fetch order only look at what a source reports:
 
    | Capability | Meaning |
@@ -23,7 +50,7 @@ Status: **proposal**, not built. This covers how Honeycomb on the desktop, Honey
 | Phone only | phone (local files) | phone | none | local player |
 | Desktop only | computer | desktop | library (today's app) | none |
 | Desktop + phone | computer | desktop | library + OpenSubsonic server | client of the desktop |
-| Server + desktop and/or phone | server | server | client of the server | client of the server (plus the desktop on the LAN, as a faster copy) |
+| Server + desktop and/or phone | server | server | client of the server | client of the server |
 
 Onboarding on both apps asks **"Where's your music?"** (on this device / on my computer / on a server) instead of assuming a setup.
 
@@ -37,18 +64,17 @@ The answer becomes the app's **mode**, which can be changed later in Settings. A
 | --- | --- | --- |
 | **1. Standalone** | your library, as today | no server or phone rows, no remote or pinned states |
 | **2. With phones** | your library, plus the OpenSubsonic server for paired phones. State owner | phone rows (Sync, Disconnect) in Settings → Library, Settings → Phone |
-| **3. With server** | client of a server (metadata mirror, streaming, pinning). Serves phones on the same Wi-Fi from what it has locally, as a faster copy, never as the state owner | server row, track states, tag editing and Inbox off for `remote` tracks (C11) |
+| **3. With server** | client of a server (metadata mirror, streaming, pinning). Doesn't serve phones; they use the server directly | server row, track states, tag editing and Inbox off for `remote` tracks (C11) |
 
-**Phone: 4 modes**
+**Phone: 3 modes**
 
 | Mode | Sources | State owner |
 | --- | --- | --- |
 | **1. Standalone** | its own folders (and optionally the system Music library) | phone |
-| **2. With PC** | the desktop | desktop |
+| **2. With computer** | the desktop | desktop |
 | **3. With server** | a server only, no desktop | server |
-| **4. With server + PC** | the server, plus the desktop on the same Wi-Fi as a faster copy (fetch priority: local → desktop → server) | server |
 
-**Switching modes** goes through the upgrade paths below. Going down a mode (2 → 1, 3 → 1, 4 → 3, …) runs **Disconnect** on the sources that go away, with its keep-or-delete choice.
+**Switching modes** goes through the upgrade paths below. Going down a mode (2 → 1, 3 → 1) runs **Disconnect** on the sources that go away, with its keep-or-delete choice. Moving the desktop from mode 2 to mode 3 (adding a server while phones are paired) is "Anything → + server" below; each paired phone then adds the server itself, and its pairing with the computer is disconnected with the usual keep-or-delete choice.
 
 ## What exists today
 
@@ -82,7 +108,7 @@ Everything is one crate (`src-tauri`), with no Cargo workspace. The settings lis
 **Recommendation: replace the API surface, keep the plumbing.** Of the three options:
 
 - **Keep it alongside OpenSubsonic: no.** Two protocols means two things to secure, test and document. Nothing depends on the custom one yet: it's unreleased, and there's no phone app.
-- **Replace all of it: no.** Most of it isn't protocol-specific and is already tested.
+- **Replace all of it: no.** Most of it isn't protocol-specific, and the branch has tests for it.
 - **Reuse (recommended):**
 
   | Keep as is | Becomes | Dropped |
@@ -105,11 +131,12 @@ Everything is one crate (`src-tauri`), with no Cargo workspace. The settings lis
 
 ### Server crate
 
-New crate `crates/honeycomb-server`: an OpenSubsonic server library. It takes a library handle (DB path plus data dir) and has no Tauri dependency. The desktop starts it in-process. Later, a small `main.rs` in the same crate becomes a headless `honeycomb-server` (Docker image) that scans folders itself.
+New crate `crates/honeycomb-server`: an OpenSubsonic server library. It takes a library handle (DB path plus data dir) and has no Tauri dependency. The desktop starts it in-process. Because it has no Tauri dependency, a headless build stays possible later (see non-goals).
 
 - **HTTP stack:** axum on the hyper 1 + rustls 0.23 + tokio stack `phone.rs` already uses. Today's handlers are a hand-written `match` on the path. With around 25 endpoints, axum's routing and extractors pay for themselves.
-- **Network:** LAN only by default. It binds every interface, as `phone.rs` does today, but answers only private and link-local addresses unless the user turns on "allow from anywhere" (headless defaults to on).
-- **Endpoints for v1:** only what Honeycomb's own clients need. Third-party clients get whatever falls out of that.
+- **Network:** LAN only. It binds every interface, as `phone.rs` does today, but answers only private and link-local addresses, judged by the connection's peer address (never a forwarded header). `pair` and failed logins are rate-limited per address.
+- **Shared database:** the desktop and its server use the same `library.db` in WAL mode, so reads never wait. Scans commit in small transactions, so phones' writes (`star`, `setRating`, `playTotals`) aren't held up for long.
+- **Endpoints for v1:** only what Honeycomb's own clients need. Third-party clients are a non-goal.
 
 | Group | Endpoints |
 | --- | --- |
@@ -118,7 +145,7 @@ New crate `crates/honeycomb-server`: an OpenSubsonic server library. It takes a 
 | Playlists | `getPlaylists`, `getPlaylist`, `createPlaylist`, `updatePlaylist`, `deletePlaylist` |
 | Media | `stream`, `download`, `getCoverArt`, `getLyricsBySongId` (`songLyrics`) |
 | State | `star`, `unstar`, `setRating`, `scrobble`, `getStarred2` |
-| Honeycomb extension | `pair` (no auth), `upload`, `playTotals` |
+| Honeycomb extension | `pair` (no auth), `playTotals`, and the `rating10` field. `upload` comes in phase 5 |
 
 ### Core crate (the restructuring the server needs)
 
@@ -187,8 +214,8 @@ Both are off by default. After the first phone is paired, Settings → Phone sug
 - **Remote sources:** a server, the desktop, or both.
   - **Offline:** `download` through a background `URLSession`. Synced files are excluded from iCloud backup (`isExcludedFromBackup`).
   - **Info.plist:** `NSLocalNetworkUsageDescription`, `NSBonjourServices = [_honeycomb._tcp]`.
-  - **TLS:** the desktop's certificate is self-signed and pinned in the URLSession delegate. ATS still applies its protocol rules (TLS 1.2+, forward secrecy, SHA-256 signatures), and rcgen with rustls meets them.
-- **The phone never runs an OpenSubsonic server.** Over a cable it only relays its own requests (C9).
+  - **TLS:** the desktop's certificate is self-signed and pinned in the URLSession delegate. ATS still applies its protocol rules (TLS 1.2+, forward secrecy, SHA-256 signatures). An rcgen ECDSA P-256 certificate over rustls should meet them; this is checked on a real iPhone in phase 5.
+- **The phone never runs an OpenSubsonic server.** Over a cable it accepts one USB connection from the computer and uses it only to send its own requests (C9).
 
 **Where the networking lives (A ✅, approved).** The shared Rust core owns the networking. Swift only handles the two things iOS reserves for its own APIs.
 
@@ -199,7 +226,7 @@ Both are off by default. After the first phone is paired, Settings → Phone sug
 | Downloads that must continue after the user leaves the app | Rust | **Swift**: background `URLSession`, from a job list the core hands over (URL, API key, expected size, certificate fingerprint). Swift reports each finished file back to the core |
 | Finding computers on the network | n/a | **Swift**: `NWBrowser` (no multicast entitlement needed, unlike a Rust mDNS library), which passes the addresses to the core |
 
-- **The core** contains the OpenSubsonic client, certificate pinning (the rustls verifier from `phone.rs`'s test harness), the sync planner (compares a source's listing with the local DB and decides what to download, delete or push), dedupe, the local DB, Kaseki and the cable transport. The cable needs no local relay, because the core can speak OpenSubsonic over the tunnel's stream directly.
+- **The core** contains the OpenSubsonic client, certificate pinning (the rustls verifier from `phone.rs`'s test harness), the sync planner (compares a source's listing with the local DB and decides what to download, delete or push), dedupe, the local DB, Kaseki and the cable transport. Over a cable, the core speaks OpenSubsonic directly over the usbmuxd stream, so nothing on the phone has to forward traffic.
 - **Swift** also watches network conditions (`NWPathMonitor`: Low Data Mode, cellular allowed, VPN) and passes them to the core, since Rust's networking doesn't see those system settings.
 - **Pinning exists twice:** in the core for its requests, and in the `URLSession` delegate for background downloads. Both compare one SHA-256 string against the same stored value.
 - **The desktop** already uses this client and planner (`subsonic`, `mirror`; they move into `honeycomb-core` in phase 1). Its discovery uses `mdns-sd`, which comes over with the phone-server code in phase 2.
@@ -207,8 +234,13 @@ Both are off by default. After the first phone is paired, Settings → Phone sug
 ## Multi-source rules
 
 1. **Dedupe:** by MusicBrainz recording id when both sides have one. Otherwise, the existing loose match (`matching::LibraryIndex`: artist, title, duration). See C4 on audio hashes.
-2. **Fetch priority:** local file → desktop on the LAN (found over Bonjour) → server.
+2. **Fetch priority:** a local file first, then the source the song came from. (A faster LAN copy from the desktop is a non-goal for v1.)
 3. **State:** changes go only to the state owner. Others read from it.
+4. **Changes made offline** wait in an outbox (`remote_outbox`, already built) until the owner is reachable:
+   - Only the newest change per item is kept; a newer star, rating or playlist edit replaces the waiting one.
+   - Stars and ratings: the owner keeps whatever arrives last.
+   - Playlists are always sent as the whole list, never as index-based removals. A playlist changed on the owner meanwhile is overwritten by the queued version; that is accepted for v1.
+   - Changes to songs the source no longer has are dropped.
 
 ## Auth
 
@@ -220,9 +252,10 @@ Both are off by default. After the first phone is paired, Settings → Phone sug
 Advertised as `honeycomb` in `getOpenSubsonicExtensions`. v1 covers:
 
 - **Pair** (no auth): code → API key, plus `libraryId`.
-- **Upload** (auth): a file plus its play stats, for migrations. The server places it under a folder it chooses and scans it.
-- **Play totals** (`playTotals`, auth): the device sends, for each song it played, its **running total since pairing** plus its latest play time: `{trackId, count, lastPlayed}`. The server stores one row per device and song, and replaces it only when `count` goes up. A song's play count = the owner's own plays + the sum of every device's total; `last_played` = the latest of all. Sending the same totals twice changes nothing, so retries are always safe.
-- **Half-star ratings:** an optional `rating10` (0–10) on `setRating` and on song results, so Honeycomb clients don't lose half-stars.
+- **Upload** (auth, phase 5): a file plus its play stats, for migrations. The server places it under a folder it chooses and scans it. File names are sanitised (no path separators or `..`); the full contract (size limits, resuming) is written when phase 5 starts.
+- **Play totals** (`playTotals`, auth): the device sends, for each song it played, its **running total since pairing** plus its latest play time: `{trackId, count, lastPlayed}`. The server stores one row per device and song, and replaces it only when `count` goes up. A song's play count = the owner's own plays + the sum of every device's total; `last_played` = the latest of all. Sending the same totals twice changes nothing, so retries are always safe. A device whose total for a song goes *down* (its database was reset or restored) is treated as re-paired: it gets a new device row, and the old row's plays stay counted. Totals are keyed on song ids, which survive moves and renames (C2).
+- **Half-star ratings:** an optional `rating10` field (0–10) on `setRating` and on song results, so Honeycomb clients don't lose half-stars. It's a field, not an endpoint.
+- **Version:** advertised as version 1. A client ignores extension features it doesn't know.
 
 ## Upgrade paths
 
@@ -240,44 +273,100 @@ Advertised as `honeycomb` in `getOpenSubsonicExtensions`. v1 covers:
 
 ## Cable
 
-Cable is a transport, not a protocol: OpenSubsonic over a usbmuxd TCP tunnel. Android cable support is future work.
+Cable is a transport, not a protocol: OpenSubsonic over a usbmuxd TCP tunnel. The computer needs usbmuxd: built into macOS, Apple Devices on Windows, `usbmuxd` (libimobiledevice) on Linux. Android cable support is future work.
 
-## Conflicts and open questions
+## Decision log
 
-| # | Conflict | Proposal |
-| --- | --- | --- |
-| C1 ✅ | **No artist or album entities.** `tracks` is flat, but `getArtists` and `getAlbum` need stable ids for them. | **Approved.** Derive ids from a hash of the normalized album artist + album (album id) and the artist name (artist id). Compute them on demand at first, and cache them in a table only if it's too slow at 100k tracks. Renaming an album or artist changes its id. Song ids never change, because tag edits update the row in place (`upsert_track`, `ON CONFLICT(path)`), so nothing is downloaded again. **Rule:** clients keep long-lived data (offline pins, later album stars) per **song id**. A pinned album also remembers its album id. When that id disappears, the client looks up the album its songs moved to and moves the pin there, so songs added to the album later are still kept. |
-| C2 ✅ | **Track ids aren't stable.** They're SQLite autoincrement and tied to the path, so moving a file gives it a new id, and clients' caches go stale. | **Approved for v1:** accepted, since clients re-sync from the snapshot. **Later fix: move detection in the scanner.** Today a moved or renamed file is deleted from `tracks` (`scanner.rs`, "files that disappeared") and found again as a new song. Besides the new id, that also loses its play count, rating, loved flag and playlist entries, which is a bug on the desktop with no phone involved. The fix: at the end of a scan, before deleting vanished paths, match each vanished track with a newly found one (same MusicBrainz id, or same size + duration + title/artist/album). On a match, update the old row's `path` instead of deleting it and inserting a new one, so the id and all stats are kept. Planned as its own small change, independent of the phases. |
-| C3 ✅ | **Ratings are half-stars.** Subsonic `userRating` is 1–5 whole stars. | **Approved.** The state owner stores one value, 0–10. **Reading:** `rating10` returns it exactly (extension). `userRating` = `ceil(rating10 / 2)`, so a half star shows as 1 and never as unrated, and 3.5 shows as 4. **Writing:** `rating10` is stored as is. A standard `setRating` of n is stored as n × 2. **Rule:** clients send a rating only when the user changes it, never a value they just read, so rounding never writes itself back. **Owner without the extension** (a server only storing whole stars): the desktop's star picker switches to whole stars while that server is the state owner. Moving a library there rounds half-stars up, and the migration dialog says so first. |
-| C4 ✅ | **"Else audio hash" can't work across sources.** Subsonic doesn't expose a content hash, so comparing would mean downloading every file. Hashing locally at scan time also slows scans down a lot. | **Approved.** Use MBID → loose match (`matching::LibraryIndex`, which moves into `honeycomb-core`), which already handles real libraries. Add hashing only if it turns out to be needed. MBIDs need a new column plus reading them in `meta.rs` (lofty `ItemKey::MusicBrainzRecordingId`). |
-| C5 ✅ | **`scrobble` isn't idempotent.** A retried batch double-counts. The current protocol solves this with `phone_plays`. | **Approved (revised).** **Honeycomb servers:** devices count their own plays and send running totals per song through `playTotals` (extension; see above). Syncing happens when the app opens, and in the background once or twice a day when the OS allows it (iOS `BGAppRefreshTask`). This replaces both `playId` and the `phone_plays` table. The library only stores `play_count` and `last_played`, so totals lose nothing the app uses. Totals count plays **since pairing**: a re-paired device starts from 0 under a new device row, and the old row's total stays counted. Removing a device keeps its counted plays. **Last.fm:** a device that scrobbles does it itself, straight to the service, because totals can't be split back into timestamped plays. **Other servers:** standard `scrobble`; delete plays locally only after a 200, and accept rare duplicates. **Navidrome plugin (later):** not possible on v0.64.2, because plugins can't receive requests. Possible once navidrome/navidrome#5045 (plugin HTTP endpoints, open as of 2026-10-30) lands: `POST /rest/ext/honeycomb/playTotals` keeps the last total it applied per user, device and song, and calls the standard `scrobble` for the difference (zero or less means nothing to do). Same totals model as Honeycomb servers. Rough effort: 2 days plugin + half a day client. Known limits: send one request per device at a time; a server crash between scrobbling and saving can affect one batch; Last.fm sees the difference as several plays at almost the same moment (C8 already keeps Last.fm in one place). |
-| C6 ✅ | **The brief puts the API key in the QR code.** Anyone who photographs the screen gets a permanent key. It also contradicts "keep the existing pairing design". | **Approved.** Keep the code in the QR code (single use, 5 minutes) and exchange it for a key over pinned TLS. |
-| C7 ✅ | **Smart playlists are read-only in Subsonic terms.** | **Approved.** Resolve them on `getPlaylist`, and refuse `updatePlaylist` with a clear error. |
-| C8 ✅ | **Double scrobbles to Last.fm.** With a server as state owner, the server may scrobble to Last.fm (if it's set up) and so may Honeycomb's scrobbling plugin. | **Approved.** Remote mode warns when both are on. The user picks one. |
-| C9 ✅ | **Cable vs. "phone never acts as a server".** usbmuxd only lets the computer connect *to* the phone, so the phone must accept a TCP connection over USB. | **Approved.** The phone accepts that one connection only as a relay: it carries the phone's own client requests to the desktop, and serves nothing. TLS stays end to end. |
-| C10 ✅ | **Background downloads can't use the cable.** Background `URLSession` runs out of process, so it can't reach the app's tunnel. | **Approved.** Cable sync is foreground only: the Rust core speaks OpenSubsonic over the tunnel directly (see A). Wi-Fi keeps the background downloads. **Warning pop-up:** when a cable sync starts, the phone explains that the app has to stay open until it's done, and offers **Keep the screen on until done** (`isIdleTimerDisabled = true`, turned back off when the sync finishes, fails or is cancelled). When the computer is also reachable over Wi-Fi, it offers **Continue over Wi-Fi** too, which hands the rest to background downloads. If the user leaves anyway, the app asks iOS for a little extra time (`beginBackgroundTask`) to finish the current file, then pauses. Files already finished are kept, so the next sync resumes. A "Don't show again" option keeps the screen-on choice. |
-| C11 ✅ | **Desktop as a server client is a second app mode.** Tag editing, the Inbox, rescans and file-based lyrics assume local files. | **Approved.** `remote` tracks disable those actions in v1. Tag edits for remote tracks are out of scope (Subsonic can't write tags). Which UI each app shows is decided by its mode (see Modes). |
-| C12 ✅ | **Not verified: does Navidrome support `apiKeyAuthentication`?** The spec exists, and Ampache advertises it. | **Approved. Verified 2026-11-09:** Navidrome 0.64.2 doesn't advertise it (it lists transcodeOffset, formPost, songLyrics, indexBasedQueue, transcoding, playbackReport and topSongsByArtistId). Honeycomb uses the legacy salted token, with the password in the system keychain, and switches to API keys on servers that offer them. |
-| C13 ✅ | **Empty `search3` queries** are an OpenSubsonic clarification that most servers follow, but not all. | **Approved.** Fall back to walking `getAlbumList2` + `getAlbum` when an empty query returns nothing. |
-| C14 ✅ | **Headless server and the GUI-only pieces.** Plugins, the updater and media keys don't apply headless. Settings → Phone becomes a web or CLI pairing flow there. | **Approved.** Headless pairing prints the code and QR code to the console. Nothing more in v1. |
-| C15 ✅ | **The desktop can't make a phone sync.** The phone is only a client, so the desktop can't reach it. A phone only syncs when its app opens a connection. | **Approved: no Sync button on phone rows.** The row shows "Last synced 2 h ago", plus a short line under it saying how to sync right now: "To sync now, open Honeycomb on the phone (same Wi-Fi, or plugged in)." A small ⓘ next to it explains the rest: the phone also syncs by itself once or twice a day when iOS lets it, and the computer can't start a sync on its own. When the phone hasn't synced for 30 days (the status line in Settings → Library), the hint is highlighted. |
-| C16 ✅ | **What Disconnect does to a server's tracks.** Plays and ratings made while it was the state owner live on the server. | **Approved, with a last pull.** When the server can be reached, Disconnect first asks: **Bring your stuff over before disconnecting?** • **Ratings, play counts, loved songs and playlists** (on by default, small): copied to the desktop for every track it keeps (pinned files and tracks that dedupe matched to local files). Playlists become manual playlists, and play counts take the larger of the two numbers. • **Also download the songs that aren't on this computer yet** (off by default, shows the size, e.g. "2,340 songs, 41 GB"). Disconnect waits for it, can be cancelled, and resumes on the next try. After the pull, the desktop becomes the state owner, then the usual keep-or-delete choice runs. When the server can't be reached, the dialog says the stats on the server can't be brought over right now, and offers **Try again later** (the default) or **Disconnect anyway**. |
-| C17 ✅ | **Telling a phone what to do after it's removed.** The desktop can't reach the phone, and once its key is revoked the phone's next request just gets an auth error. | **Approved: a week's grace.** Disconnect **suspends** the device's key for 7 days and stores the user's choice (`keep` or `delete`). The row shows "Removing… (6 days left) · Undo". **Undo** within the week restores the device as it was: no re-pairing, and its play totals carry on. **Phone connects within the week:** instead of library access it gets the choice. Keep → the music stays as local tracks. Delete → the phone shows "Removed from <computer>. Its music will be deleted from this phone" with **Keep it instead** / **OK**, a second confirmation on the device that loses the files. Then the device row is deleted. **No contact for 7 days:** the key, the choice and the row are deleted. A phone that later gets a plain auth error asks its user, Keep by default, and never deletes on its own. **Never:** treating "can't reach the computer" as removal; that happens every time the phone leaves home. |
+Every conflict between the plan and the code, with what was decided. All are approved by the owner. Longer behaviour is under Decision details below.
+
+| # | Conflict | Decision | Phase |
+| --- | --- | --- | --- |
+| C1 | `tracks` is flat, but `getArtists` and `getAlbum` need stable artist and album ids. | Derive them from a hash of the normalized album artist + album (album id) and the artist name (artist id). Clients keep long-lived data per song id. [Details](#c1-artist-and-album-ids) | 2 |
+| C2 | Moving or renaming a file used to give it a new id and lose its stats. | **Built:** the scanner keeps a moved file's row (see [details](#c2-moved-files-keep-their-id)), so song ids survive moves. | done |
+| C3 | Ratings are half-stars; Subsonic `userRating` is whole stars. | The owner stores 0–10. `userRating` = `ceil(rating10 / 2)`; a standard `setRating` of n is stored as 2n. Whole-star picker for server songs (**built**). [Details](#c3-half-star-ratings) | 2 (server) |
+| C4 | "Else audio hash" can't work across sources: Subsonic exposes no content hash. | Dedupe by MusicBrainz recording id, then the loose match (`matching::LibraryIndex`). Hashing only if it turns out to be needed. | 4 |
+| C5 | `scrobble` isn't idempotent, so a retried batch double-counts. | Honeycomb servers: per-device running totals through `playTotals`. Other servers: standard `scrobble`, accepting rare duplicates. [Details](#c5-play-counts) | 2, 5 |
+| C6 | Putting the API key in the QR code would let anyone who photographs the screen keep a permanent key. | The QR code carries the single-use code (5 minutes); it's exchanged for a key over pinned TLS. | 3 |
+| C7 | Smart playlists are read-only in Subsonic terms. | Resolved on `getPlaylist`; `updatePlaylist` refuses them with a clear error. | 2 |
+| C8 | With a server as owner, the server and Honeycomb's scrobbling plugin may both scrobble to Last.fm. | Desktop mode 3 warns when both are on, and the user picks one. | 4 |
+| C9 | usbmuxd only lets the computer connect *to* the phone. | The phone accepts that one connection and uses it only for its own requests; it serves nothing. TLS stays end to end. | 6 |
+| C10 | Background `URLSession` runs out of process, so it can't use the cable. | Cable sync is foreground only; Wi-Fi keeps background downloads. [Details](#c10-cable-sync-in-the-foreground) | 6 |
+| C11 | Tag editing, the Inbox, rescans and file-based lyrics assume local files. | `remote` tracks disable those actions in v1 (Subsonic can't write tags). | done |
+| C12 | Does Navidrome support `apiKeyAuthentication`? | **Verified 2026-11-09:** Navidrome 0.64.2 doesn't advertise it. Honeycomb uses the legacy salted token, with the password in the keychain, and switches to API keys on servers that offer them. **Built.** | done |
+| C13 | Empty `search3` queries aren't guaranteed by the spec. | Fall back to walking `getAlbumList2` + `getAlbum`. **Built.** | done |
+| C14 | Headless server and the GUI-only pieces. | Out of v1 (see non-goals). If it's built later, pairing prints the code and QR code to the console. | — |
+| C15 | The desktop can't start a phone sync; the phone is only a client. | No Sync button on phone rows; the row says how to sync now. [Details](#c15-phone-rows) | 3 |
+| C16 | Disconnecting a server: plays and ratings made while it owned the state live on the server. | A last pull before Disconnect, when the server can be reached. [Details](#c16-last-pull-before-disconnecting-a-server) | 4 |
+| C17 | The desktop can't tell a removed phone what to do, and a revoked key only gives an auth error. | Disconnect suspends the key for a week and stores keep-or-delete for the phone. [Details](#c17-a-weeks-grace-for-removed-phones) | 3 |
+
+## Decision details
+
+### C1: artist and album ids
+
+Compute ids on demand at first, and cache them in a table only if that's too slow at 100k tracks. Renaming an album or artist changes its id. Song ids don't change on tag edits, because they update the row in place (`upsert_track`, `ON CONFLICT(path)`), so nothing is downloaded again. Two releases with the same artist and album name share an id unless they differ by year, which is added to the hash when present. Songs with no album tag are grouped per album artist.
+
+**Rule for clients:** keep long-lived data (offline pins, later album stars) per **song id**. A pinned album also remembers its album id. When that id disappears, the client looks up the album its songs moved to and moves the pin there, so songs added to the album later are still kept.
+
+### C2: moved files keep their id
+
+At the end of a scan, before removing vanished paths, the scanner pairs each vanished track with a newly found one that has the same title, artist, album and audio format (bitrate and sample rate) and a duration within half a second. Only one-to-one pairs count. On a match, the old row takes the new path and tags, so the id, play count, rating, loved flag and playlist entries are kept (`scanner.rs`, `find_moves`). Files that change format or tags while moving still come back as new songs.
+
+### C3: half-star ratings
+
+**Reading:** `rating10` returns the stored value exactly (extension). `userRating` = `ceil(rating10 / 2)`, so a half star shows as 1 and never as unrated, and 3.5 shows as 4. **Writing:** `rating10` is stored as is; a standard `setRating` of n is stored as n × 2. Clients send a rating only when the user changes it, never a value they just read, so rounding never writes itself back. **Owner without the extension** (a server that only stores whole stars): the desktop's star picker offers whole stars for that server's songs (built). Moving a library there rounds half-stars up, and the migration dialog says so first.
+
+### C5: play counts
+
+**Honeycomb servers:** devices count their own plays and send running totals per song through `playTotals` (see Honeycomb extension). They send when the app opens, and in the background once or twice a day when the OS allows it (iOS `BGAppRefreshTask`). Background refresh only pushes totals and waiting changes; a full library listing happens when the app is open. This replaces both `playId` and the `phone_plays` table. The library only stores `play_count` and `last_played`, so totals lose nothing the app uses. Totals count plays **since pairing**: a re-paired device starts from 0 under a new device row, and the old row's total stays counted. Removing a device keeps its counted plays. The existing `listens` table (listening history) stays as it is; it's a local log, not something that syncs.
+
+**Last.fm:** a device that scrobbles does it itself, straight to the service, because totals can't be split back into timestamped plays.
+
+**Other servers:** standard `scrobble`. Plays are deleted locally only after a 200, and rare duplicates are accepted.
+
+A Navidrome plugin that accepts play totals isn't possible on 0.64.2 (plugins can't receive requests). It could be revisited if Navidrome adds plugin HTTP endpoints (navidrome/navidrome#5045).
+
+### C10: cable sync in the foreground
+
+The Rust core speaks OpenSubsonic over the tunnel directly (see "Where the networking lives"). When a cable sync starts, the phone explains that the app has to stay open until it's done, and offers to keep the screen on until then. When the computer is also reachable over Wi-Fi, it offers to continue over Wi-Fi instead, handing the rest to background downloads. If the user leaves anyway, the app asks iOS for a little extra time to finish the current file, then pauses. Finished files are kept, so the next sync resumes.
+
+### C15: phone rows
+
+The row shows when the phone last synced, and a short line saying how to sync now: open Honeycomb on the phone, on the same Wi-Fi or plugged in. The phone also syncs by itself once or twice a day when iOS lets it; the computer can't start a sync on its own. When a phone hasn't synced for 30 days, the hint is highlighted.
+
+### C16: last pull before disconnecting a server
+
+When the server can be reached, Disconnect first offers to bring things over:
+- **Ratings, play counts, loved songs and playlists** (on by default; metadata only): copied to the desktop for every song it keeps (offline copies, and songs that dedupe matched to local files). Playlists become manual playlists, and play counts take the larger of the two numbers.
+- **The songs that aren't on this computer yet** (off by default; shows the total size). Disconnect waits for the download, can be cancelled, and resumes on the next try.
+
+After the pull, the desktop becomes the state owner, then the usual keep-or-delete choice runs. When the server can't be reached, the dialog says the stats can't be brought over right now, and offers to try again later (the default) or disconnect anyway.
+
+### C17: a week's grace for removed phones
+
+Disconnect **suspends** the device's key for 7 days and stores the user's choice (`keep` or `delete`). The row shows that removal is pending, with Undo.
+- **Undo within the week** restores the device as it was: no re-pairing, and its play totals carry on.
+- **The phone connects within the week:** instead of library access, a request with the suspended key gets the stored choice. Keep: the music stays as local tracks. Delete: the phone asks its user to confirm first, since it's the device that loses the files. Then the device row is deleted.
+- **No contact for 7 days:** the key, the choice and the row are deleted. A phone that later gets a plain auth error asks its user, Keep by default, and never deletes on its own.
+- **Never** treat "can't reach the computer" as removal; that happens every time the phone leaves home.
 
 ## Phased plan
 
-Each phase ends in something testable.
+Each phase ends in something testable. Reference server for tests: Navidrome 0.64.2.
 
-1. **Workspace split.** Create a Cargo workspace with `crates/honeycomb-core` and `crates/kaseki`, and make `src-tauri` depend on them. No behaviour changes.
+1. **Workspace split.** Create a Cargo workspace with `crates/honeycomb-core` and `crates/kaseki` (see the module table under Core crate), and make `src-tauri` depend on them. No behaviour changes.
    *Done when:* the full `cargo test` suite passes with the same number of tests as before the split, and a manual check (scan a folder, play a track, edit a tag, sync from a server) behaves as before.
-2. **Server crate.** Starts by porting the reusable phone-server pieces from `wip/phone-sync` (see "Getting it onto `dev`"). Then `crates/honeycomb-server` with the v1 endpoints over a `honeycomb-core` library, plus API-key auth and the Honeycomb extension (`pair`, `playTotals`, `rating10`). This includes C1 (ids) and C7 (smart playlists).
-   *Done when:* tests drive every endpoint with a pinned client (the harness moves over from `phone.rs`), and an off-the-shelf OpenSubsonic client can browse and play from it on a laptop.
-3. **Desktop server and pairing.** The desktop starts the server in place of `phone.rs`'s API: same certificate, Bonjour advert, Settings → Phone and `devices` table. Pairing returns an API key. Paired phones appear in the Settings → Library list with Disconnect. Menu-bar mode and start at login. The old `/v1` endpoints are removed (only with your approval). `docs/phone-sync.md` is rewritten as the extension spec.
-   *Done when:* QR pairing and typed-code pairing both work from a test client, and revoking a device turns its key's next request into an auth error.
-4. **Desktop as a client of a server: the rest.** Already built: sources, the metadata mirror, track states, streaming through Kaseki, pinning, the outbox for playlists, stars and ratings, and server rows with Sync and Disconnect. Left: the MBID column and dedupe by MBID, the state-owner switch (pushing playlists, stars and ratings when a server becomes the owner), the C3 whole-star picker, the C8 double-scrobble warning, and the C16 last pull on Disconnect.
-   *Done when:* those pieces work against a real Navidrome library of 10k+ tracks, and a full listing of that library is timed (the number decides whether delta sync is needed).
-5. **iOS** (in its own private repo). Kaseki on iOS (the 2–3 day experiment), then standalone local playback, then the desktop and server sources with background downloads, then upload-based migration.
-   *Done when:* each step works on a real iPhone.
-6. **Cable (iPhone).** The usbmuxd relay (C9, C10) on top of phase 5.
+2. **Server crate.** Starts by porting the reusable phone-server pieces from `wip/phone-sync` (see "Getting it onto `dev`"). Then `crates/honeycomb-server` with the v1 endpoints over a `honeycomb-core` library, API-key auth, `pair`, `playTotals` and the `rating10` field. Covers C1, C3 (server side), C5 (`playTotals`) and C7.
+   *Done when:* tests drive every endpoint with a pinned client (the harness from `phone.rs`), including: a bad or missing API key; `updatePlaylist` on a smart playlist is refused; `playTotals` sent twice, or with a lower count, changes nothing; `rating10` 7 reads back as `userRating` 4; requests from a public address are refused.
+3. **Desktop server and pairing.** The desktop starts the server: same certificate, Bonjour advert, Settings → Phone and `devices` table. Pairing returns an API key (C6). Paired phones appear in the Settings → Library list with Disconnect, including the week's grace (C17) and the sync hint (C15). Menu-bar mode and start at login. The old `/v1` endpoints are removed, with the owner's sign-off. `docs/phone-sync.md` is rewritten as the extension spec.
+   *Done when:* QR and typed-code pairing both work from a test client; an expired, reused or fifth wrong code is refused; a disconnected device's key gets the keep-or-delete answer during the week and an auth error after it; Undo restores the device; the app keeps serving with its window closed in menu-bar mode.
+4. **Desktop as a client of a server: the rest.** Already built: sources, the metadata mirror, track states, streaming through Kaseki, pinning, the outbox for playlists, stars and ratings, and server rows with Sync and Disconnect. Left: the MBID column (read by `meta.rs`; a new schema version that rescans files once) and dedupe by MBID (C4), the state-owner switch (pushing playlists, stars and ratings when a server becomes the owner), the double-scrobble warning (C8), and the last pull on Disconnect (C16).
+   *Done when:* those pieces work against a real Navidrome library of 10k+ tracks, and a full listing of that library is timed. If it's too slow, a delta-sync extension is designed before phase 5.
+5. **iOS** (in its own private repository). Each step ends on a real iPhone:
+   1. Kaseki plays a local file through the iOS audio stack (a time-boxed spike of about 2–3 days; if it fails, playback falls back to the system player and the rest of the plan stands).
+   2. Standalone mode: picked folders play offline and survive an app restart.
+   3. The desktop and server sources: pairing, browsing, background downloads finishing with the app closed, and plays reaching the owner.
+   4. `upload`-based migration (phone only → + desktop), with the server side of `upload` built here.
+6. **Cable (iPhone).** OpenSubsonic over usbmuxd (C9, C10) on top of phase 5.
+   *Done when:* a full sync completes over USB with Wi-Fi off, and leaving the app mid-sync pauses and later resumes without losing finished files.
 
-Not planned: Android, two-way merging, tag editing for remote tracks, a web UI for the headless server.
+Not planned: everything under non-goals.
