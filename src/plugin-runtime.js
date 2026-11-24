@@ -358,4 +358,6 @@ if (typeof window !== "undefined") {
     void createRuntime(e.ports[0], e.data).start();
   };
   window.addEventListener("message", init);
+  // The frame's load event can come before this module runs (WebView2), so say when it's listening.
+  window.parent.postMessage({ honeycomb: "listening" }, "*");
 }

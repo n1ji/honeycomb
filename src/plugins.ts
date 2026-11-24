@@ -192,12 +192,17 @@ async function activate(m: PluginManifest) {
       `<!doctype html><meta charset="utf-8">` +
       `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src ${base}">` +
       `<script type="module" src="${base}${RUNTIME}"></script>`;
-    const loaded = new Promise<void>((resolve, reject) => {
-      frame.addEventListener("load", () => resolve(), { once: true });
+    let heard: (e: MessageEvent) => void = () => {};
+    const listening = new Promise<void>((resolve, reject) => {
+      heard = (e) => {
+        if (e.source === frame.contentWindow && e.data?.honeycomb === "listening") resolve();
+      };
+      window.addEventListener("message", heard);
       frame.addEventListener("error", () => reject(new Error("its frame didn't load")), { once: true });
+      window.setTimeout(() => reject(new Error("its frame didn't load")), START_TIMEOUT);
     });
     document.body.append(frame);
-    await loaded;
+    await listening.finally(() => window.removeEventListener("message", heard));
 
     const { port1, port2 } = new MessageChannel();
     const running: Running = {
