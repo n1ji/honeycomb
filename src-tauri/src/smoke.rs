@@ -26,6 +26,8 @@ use crate::{AppState, db, kaseki, scanner};
 
 /// The UI calls `ui_ready` when it has rendered; this holds the track count it saw.
 static UI_READY: Mutex<Option<usize>> = Mutex::new(None);
+/// Plugins that failed to load, as "id: why".
+static PLUGIN_ERRORS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 pub fn folder() -> Option<PathBuf> {
     std::env::var_os("HONEYCOMB_SMOKE").filter(|v| !v.is_empty()).map(PathBuf::from)
@@ -69,7 +71,10 @@ fn sandbox(state: &AppState, r: &mut Report) {
             Some(how) => format!("plugin sandbox: a plugin {how}"),
             None => format!(
                 "plugin sandbox: the second test plugin never finished ({})",
-                setting("plugin.probe-b.step").as_deref().unwrap_or("it never started")
+                setting("plugin.probe-b.step").unwrap_or_else(|| {
+                    let errors = PLUGIN_ERRORS.lock().unwrap_or_else(|p| p.into_inner()).join("; ");
+                    if errors.is_empty() { "it never started".into() } else { errors }
+                })
             ),
         },
     );
@@ -87,7 +92,8 @@ fn sandbox(state: &AppState, r: &mut Report) {
     }
 }
 
-pub fn ui_ready(tracks: usize) {
+pub fn ui_ready(tracks: usize, plugin_errors: Vec<String>) {
+    *PLUGIN_ERRORS.lock().unwrap_or_else(|p| p.into_inner()) = plugin_errors;
     *UI_READY.lock().unwrap_or_else(|p| p.into_inner()) = Some(tracks);
 }
 

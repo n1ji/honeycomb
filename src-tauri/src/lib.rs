@@ -672,8 +672,8 @@ async fn update_install(app: AppHandle) -> Result<(), String> {
 
 /// The UI has loaded and shows `tracks` tracks (see `smoke`).
 #[tauri::command]
-fn ui_ready(tracks: usize) {
-    smoke::ui_ready(tracks);
+fn ui_ready(tracks: usize, plugin_errors: Vec<String>) {
+    smoke::ui_ready(tracks, plugin_errors);
 }
 
 // ---------- benchmark mode ----------

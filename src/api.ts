@@ -303,7 +303,7 @@ export const api = {
   syncCancel: () => invoke<void>("sync_cancel"),
   /** Which conversion formats this system can make. */
   syncFormats: () => invoke<{ aac: boolean }>("sync_formats"),
-  uiReady: (tracks: number) => invoke<void>("ui_ready", { tracks }),
+  uiReady: (tracks: number, pluginErrors: string[]) => invoke<void>("ui_ready", { tracks, pluginErrors }),
   updateStatus: (refresh = false) => invoke<UpdateStatus>("update_status", { refresh }),
   /** Downloads, installs and restarts; resolves only if something went wrong before the restart. */
   updateInstall: () => invoke<void>("update_install"),

@@ -258,6 +258,9 @@ async function stop(id: string) {
   await invoke("plugin_stop", { plugin: id });
 }
 
+/** Plugins that failed to load, as "id: why" (for the self-test). */
+export const pluginFailures = () => [...failed].map(([id, why]) => `${id}: ${why}`);
+
 /** Load every enabled plugin. One failing doesn't stop the others. */
 export async function loadPlugins() {
   const enabled = new Set(enabledIds());
