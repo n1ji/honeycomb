@@ -8,16 +8,19 @@ const raw = (how) =>
   JSON.stringify({ cmd: "set_setting", callback: 1, error: 2, payload: { key: "probe.breach", value: how }, __TAURI_INVOKE_KEY__: "x" });
 
 export async function activate(ctx) {
+  await ctx.settings.set("step", "started");
   const got = [];
   // All at once: on some systems a refused request only fails at the timeout,
   // and one after another they'd outlast the app's wait for plugins to start.
   const tries = [];
-  const attempt = (what, fn) =>
+  const left = new Set();
+  const attempt = (what, fn, key = what || `pipe ${tries.length}`) =>
+    left.add(key) &&
     tries.push(
       within(3000, Promise.resolve().then(fn)).then(
         (worked) => worked && got.push(what),
         () => {}, // Refused, which is the point.
-      ),
+      ).finally(() => left.delete(key)),
     );
 
   attempt("read probe-a's secret through its own API", () => ctx.secrets.get("token"));
@@ -46,7 +49,10 @@ export async function activate(ctx) {
   attempt("imported probe-a's files", () => import(new URL("../probe-a/main.js", import.meta.url).href));
   attempt("got storage of its own", async () => (localStorage.setItem("probe", "1"), true));
 
+  // Which attempts are still out, in case the app stops waiting first.
+  const progress = setInterval(() => void ctx.settings.set("step", `waiting on: ${[...left].join(", ") || "nothing"}`), 1000);
   await Promise.all(tries);
+  clearInterval(progress);
   await ctx.settings.set("crypto", typeof crypto?.subtle?.digest === "function" ? "yes" : "no");
   await ctx.settings.set("result", got.length ? got.join("; ") : "ok");
 }

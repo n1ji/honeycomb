@@ -67,7 +67,10 @@ fn sandbox(state: &AppState, r: &mut Report) {
         match out.as_deref() {
             Some("ok") => "plugin sandbox: no way out of it, and no other plugin's secret".to_string(),
             Some(how) => format!("plugin sandbox: a plugin {how}"),
-            None => "plugin sandbox: the second test plugin never finished".to_string(),
+            None => format!(
+                "plugin sandbox: the second test plugin never finished ({})",
+                setting("plugin.probe-b.step").as_deref().unwrap_or("it never started")
+            ),
         },
     );
     let kept = crate::plugins::secret_get(&state.conn(), "probe-a", "token");
