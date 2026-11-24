@@ -528,7 +528,7 @@ pub fn apply(conn: &mut Connection, source: i64, pulled: &Pulled) -> Result<Sync
                 plays,
                 played
             ])?;
-            link.execute(params![id, source, s.id, s.album_id, s.cover_art, s.suffix.clone().unwrap_or_default(), s.size])?;
+            link.execute(params![id, source, s.id, s.album_id, s.cover_art, s.suffix.clone().unwrap_or_default(), s.size.map(|n| n as i64)])?;
             ids.insert(s.id.clone(), id);
         }
     }
