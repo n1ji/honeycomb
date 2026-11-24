@@ -50,7 +50,7 @@ export function deactivate() {}
 
 `ctx` is a `PluginContext`; its full shape, with comments, is in [`src/plugin-api.ts`](../src/plugin-api.ts). In short:
 
-- `library`: the tracks, `match()` to find library tracks for tracks from another service (same artist and title, similar length; version notes like "- 2011 Remaster" and "(feat. …)" are ignored), and `onChange()`.
+- `library`: the tracks, `match()` to find library tracks for tracks from another service (same artist and title, similar length; version notes like "- 2011 Remaster" and "(feat. …)" are ignored), `onChange()`, and `setLoved()` / `onLoved()` to set and follow loved songs (`onLoved` fires for changes made in Honeycomb, not for the plugin's own `setLoved`).
 - `playlists`: list, create, replace tracks, show.
 - `player`: play or queue tracks, and `onNowPlaying()` / `onListened()` to follow what's playing. A song counts as listened to once half of it or 4 minutes have been heard, for songs over 30 seconds (Last.fm's rule), and fires once per play.
 - `http.request(url, { method, headers, body })`: the plugin's only way to the internet, and only to the manifest's `hosts`. Pass an object as `body` to send a form.

@@ -320,3 +320,48 @@ test("the default timers work the way browsers call them", async () => {
     globalThis.clearTimeout = real.clear;
   }
 });
+
+test("loves go to Last.fm on their own, and only the newest change per song waits", async () => {
+  const { s, calls, store } = setup({ secrets: BOTH });
+  s.flushSoon = () => {};
+  await s.listened(track(1), 1000);
+  await s.love(track(1), true);
+  await s.love(track(1), false);
+  assert.equal(JSON.parse(store.queue).filter((e) => e.kind === "love").length, 1);
+  assert.equal((await s.status()).pending, 1);
+  await s.flush();
+  const methods = calls.filter((c) => c.url === LASTFM_API).map((c) => c.body.method);
+  assert.deepEqual(methods, ["track.unlove", "track.scrobble"]);
+  const scrobble = calls.find((c) => c.body?.method === "track.scrobble");
+  assert.equal(scrobble.body["track[1]"], undefined);
+  assert.equal(calls.filter((c) => c.url.endsWith("/1/submit-listens")).length, 1);
+  assert.equal(store.queue, "[]");
+});
+
+test("loves wait without a Last.fm session, and a refused love is skipped", async () => {
+  const none = setup({ secrets: { listenbrainzToken: "lb-token" } });
+  await none.s.love(track(1), true);
+  assert.equal(none.s.queue.length, 0);
+
+  const { s, store } = setup({ secrets: BOTH, answer: () => json(200, { error: 6, message: "Track not found" }) });
+  s.flushSoon = () => {};
+  await s.love(track(2), true);
+  await s.flush();
+  assert.equal(store.queue, "[]");
+});
+
+test("loved songs are read from Last.fm page by page", async () => {
+  const page = (n, total) =>
+    json(200, { lovedtracks: { "@attr": { totalPages: String(total) }, track: [{ name: `Song ${n}`, artist: { name: "Artist" } }] } });
+  const { s, calls } = setup({
+    secrets: BOTH,
+    settings: { lastfmUser: "me" },
+    answer: (c) => page(Number(c.body.page), 2),
+  });
+  const loved = await s.lovedOnLastfm();
+  assert.deepEqual(loved, [
+    { title: "Song 1", artists: ["Artist"] },
+    { title: "Song 2", artists: ["Artist"] },
+  ]);
+  assert.deepEqual(calls.map((c) => c.body.user), ["me", "me"]);
+});

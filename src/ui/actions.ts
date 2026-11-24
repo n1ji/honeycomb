@@ -8,6 +8,7 @@ import { MenuItem, openMenu, SEP } from "./menu";
 import { openSmartEditor } from "./smarteditor";
 import { openTagEditor } from "./tageditor";
 import { openSync, SyncPick } from "./sync";
+import { notifyLoved } from "../plugins";
 
 export async function run(fn: () => Promise<unknown>) {
   try {
@@ -172,6 +173,7 @@ export async function setRating(ids: number[], rating: number) {
 export async function setLoved(ids: number[], loved: boolean) {
   await api.setLoved(ids, loved);
   store.updateTracks(ids.map((id) => ({ ...store.tracks.get(id)!, loved })));
+  notifyLoved(ids.flatMap((id) => store.tracks.get(id) ?? []), loved);
 }
 
 /** Remove the selected rows from the queue or the open manual playlist. */

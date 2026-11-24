@@ -34,6 +34,7 @@ export async function activate(ctx) {
   const s = scrobbler;
   ctx.player.onNowPlaying((t) => void s.nowPlaying(t));
   ctx.player.onListened((t, playedAt) => void s.listened(t, playedAt));
+  ctx.library.onLoved((t, loved) => void s.love(t, loved));
   ctx.ui.addSettingsSection((el) => settings(ctx, s, el));
   // Send what's left from last time.
   s.flushSoon(0);
@@ -65,6 +66,7 @@ function settings(ctx, s, el) {
     if (st.lastfmUser !== null) {
       lastfm.append(
         label(`Last.fm: signed in as ${st.lastfmUser || "you"}`),
+        button("Import loved songs", run(importLoved)),
         button("Sign out", run(() => s.disconnect("lastfm"))),
       );
     } else if (!st.lastfmKey) {
@@ -106,7 +108,7 @@ function settings(ctx, s, el) {
       h(
         "p",
         { class: "muted" },
-        "Songs longer than 30 seconds are scrobbled once you've heard half of them or 4 minutes. Scrobbles made offline are kept and sent later. For ListenBrainz, copy your user token from listenbrainz.org/settings.",
+        "Songs longer than 30 seconds are scrobbled once you've heard half of them or 4 minutes. Scrobbles made offline are kept and sent later. Loving a song in Honeycomb loves it on Last.fm too. For ListenBrainz, copy your user token from listenbrainz.org/settings.",
       ),
     );
     el.dataset.drawn = "1";
@@ -132,6 +134,14 @@ function settings(ctx, s, el) {
       signingIn = false;
       await render();
     }
+  };
+
+  // Pull only: Last.fm keeps no record of unloves, so syncing back and forth would bring them back.
+  const importLoved = async () => {
+    const loved = await s.lovedOnLastfm();
+    const ids = [...new Set((await ctx.library.match(loved)).filter((id) => id != null))];
+    if (ids.length) await ctx.library.setLoved(ids, true);
+    toast(`Loved ${ids.length.toLocaleString()} of ${loved.length.toLocaleString()} songs from Last.fm that are in your library.`);
   };
 
   const ownKey = async () => {

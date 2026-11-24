@@ -176,7 +176,7 @@ export function createRuntime(port, { manifest, settings, main }, load = (url) =
 
   // ---------- events from Honeycomb ----------
 
-  const subscribers = { library: new Set(), nowPlaying: new Set(), listened: new Set() };
+  const subscribers = { library: new Set(), nowPlaying: new Set(), listened: new Set(), loved: new Set() };
   const guarded = (fn, ...args) => {
     try {
       const r = fn(...args);
@@ -191,6 +191,7 @@ export function createRuntime(port, { manifest, settings, main }, load = (url) =
     library: () => subscribers.library.forEach((fn) => guarded(fn)),
     nowPlaying: ({ track }) => subscribers.nowPlaying.forEach((fn) => guarded(fn, track)),
     listened: ({ track, playedAt }) => subscribers.listened.forEach((fn) => guarded(fn, track, playedAt)),
+    loved: ({ track, loved }) => subscribers.loved.forEach((fn) => guarded(fn, track, loved)),
     dom: ({ id, type, value, checked, key }) => {
       const el = elements.get(id)?.deref();
       if (!el) return;
@@ -253,6 +254,8 @@ export function createRuntime(port, { manifest, settings, main }, load = (url) =
       track: (id) => call("library.track", id),
       match: (candidates) => call("library.match", candidates),
       onChange: (fn) => void subscribers.library.add(fn),
+      setLoved: (trackIds, loved) => call("library.setLoved", trackIds, loved),
+      onLoved: (fn) => void subscribers.loved.add(fn),
     },
     playlists: {
       list: () => call("playlists.list"),

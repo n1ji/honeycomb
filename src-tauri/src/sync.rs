@@ -242,17 +242,21 @@ fn conversion(p: &Profile, t: &Track) -> Option<Convert> {
 /// `exts` replaces a track's own extension (converted, or from a server).
 /// Server songs that are also in the selection as a local file (same artist and
 /// title, length within 2 s): the file is synced, the download skipped.
-fn server_twins(tracks: &[Track], is_remote: &dyn Fn(i64) -> bool) -> HashSet<i64> {
+fn server_twins(tracks: &[Track], is_remote: &dyn Fn(i64) -> bool) -> HashMap<i64, i64> {
     let key = |t: &Track| (t.artist.to_lowercase(), t.title.to_lowercase());
-    let mut local: HashMap<(String, String), Vec<f64>> = HashMap::new();
+    let mut local: HashMap<(String, String), Vec<(i64, f64)>> = HashMap::new();
     for t in tracks.iter().filter(|t| !is_remote(t.id)) {
-        local.entry(key(t)).or_default().push(t.duration);
+        local.entry(key(t)).or_default().push((t.id, t.duration));
     }
-    tracks
-        .iter()
-        .filter(|t| is_remote(t.id) && local.get(&key(t)).is_some_and(|ds| ds.iter().any(|d| (d - t.duration).abs() < 2.0)))
-        .map(|t| t.id)
-        .collect()
+    let mut map = HashMap::new();
+    for t in tracks.iter().filter(|t| is_remote(t.id)) {
+        if let Some(candidates) = local.get(&key(t)) {
+            if let Some((local_id, _)) = candidates.iter().find(|(_, d)| (d - t.duration).abs() < 2.0) {
+                map.insert(t.id, *local_id);
+            }
+        }
+    }
+    map
 }
 
 fn assign_paths(tracks: &[Track], exts: &[Option<&str>]) -> Vec<String> {
@@ -516,6 +520,10 @@ fn write_one(dest: &Path, job: &Job, cancel: &AtomicBool) -> Result<u64> {
     if !inside(dest, &target) {
         bail!("{} leads outside the destination", target.display());
     }
+    // If replacing an existing file, free its space before writing the replacement.
+    if target.is_file() {
+        let _ = fs::remove_file(&target);
+    }
     let Some(conv) = job.conv else {
         return match job.remote {
             Some(r) => write_via_part(&target, |out| crate::mirror::fetch(r, out, cancel)),
@@ -566,7 +574,29 @@ fn write_playlist(dest: &Path, name: &str, tracks: &[(&Track, &str)]) -> Result<
 fn prune_dirs(dest: &Path, rel: &str) {
     let mut p = native(dest, rel);
     while let Some(parent) = p.parent() {
-        if parent == dest || !parent.starts_with(dest) || fs::remove_dir(parent).is_err() {
+        if parent == dest || !parent.starts_with(dest) {
+            break;
+        }
+        if let Ok(entries) = fs::read_dir(parent) {
+            let mut junk = Vec::new();
+            let mut has_real = false;
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let s = name.to_string_lossy();
+                if s == ".DS_Store" || s == "Thumbs.db" || s.starts_with("._") {
+                    junk.push(entry.path());
+                } else {
+                    has_real = true;
+                    break;
+                }
+            }
+            if !has_real {
+                for j in junk {
+                    let _ = fs::remove_file(j);
+                }
+            }
+        }
+        if fs::remove_dir(parent).is_err() {
             break;
         }
         p = parent.to_path_buf();
@@ -615,8 +645,8 @@ pub fn run(
         })
         .collect();
     let twins = server_twins(&tracks, &|id| remote.contains_key(&id));
-    remote.retain(|id, _| !twins.contains(id));
-    let tracks: Vec<Track> = tracks.into_iter().filter(|t| !twins.contains(&t.id)).collect();
+    remote.retain(|id, _| !twins.contains_key(id));
+    let tracks: Vec<Track> = tracks.into_iter().filter(|t| !twins.contains_key(&t.id)).collect();
     let (mut checked, mut offline) = (HashSet::new(), HashSet::new());
     for r in remote.values() {
         if checked.insert(r.source) && !crate::mirror::reachable(r) {
@@ -794,6 +824,7 @@ pub fn run(
         for (name, ids) in &lists {
             let entries: Vec<(&Track, &str)> = ids
                 .iter()
+                .map(|id| twins.get(id).unwrap_or(id))
                 .filter_map(|id| by_id.get(id).copied())
                 .filter(|(_, rel)| m.files.contains_key(*rel))
                 .collect();
@@ -856,7 +887,8 @@ mod tests {
         let t = |id: i64, title: &str, duration: f64| Track { id, title: title.into(), artist: "MJ".into(), duration, ..Default::default() };
         let tracks = [t(1, "Bad", 247.1), t(2, "bad", 247.0), t(3, "Speed Demon", 241.0), t(4, "Bad", 300.0)];
         let twins = server_twins(&tracks, &|id| id != 1);
-        assert_eq!(twins, HashSet::from([2]));
+        assert_eq!(twins.get(&2), Some(&1));
+        assert_eq!(twins.len(), 1);
     }
 
     fn setup(name: &str) -> (PathBuf, Connection, Vec<i64>) {
@@ -1229,6 +1261,41 @@ mod tests {
         writeln!(f, "1700003000:120000:200000:/Music/Artist/Album/02 Two.mp3").unwrap();
         let r = sync(&conn, &p);
         assert_eq!(r.plays_imported, 1);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn server_twins_in_playlists_map_to_local_file() {
+        let t = |id: i64, title: &str, duration: f64| Track { id, title: title.into(), artist: "MJ".into(), duration, ..Default::default() };
+        let tracks = [t(1, "Bad", 247.1), t(2, "bad", 247.0)];
+        let twins = server_twins(&tracks, &|id| id == 2);
+        assert_eq!(twins.get(&2), Some(&1));
+        let paths = vec!["MJ/Album/01 Bad.mp3".to_string()];
+        let filtered_tracks: Vec<Track> = tracks.into_iter().filter(|t| !twins.contains_key(&t.id)).collect();
+        let by_id: HashMap<i64, (&Track, &str)> =
+            filtered_tracks.iter().zip(&paths).map(|(t, rel)| (t.id, (t, rel.as_str()))).collect();
+        let playlist_ids = vec![2]; // playlist contains the remote twin id
+        let entries: Vec<(&Track, &str)> = playlist_ids
+            .iter()
+            .map(|id| twins.get(id).unwrap_or(id))
+            .filter_map(|id| by_id.get(id).copied())
+            .collect();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].1, "MJ/Album/01 Bad.mp3");
+    }
+
+    #[test]
+    fn prune_dirs_cleans_metadata_files() {
+        let root = std::env::temp_dir().join(format!("hc-prune-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let sub = root.join("Artist").join("Album");
+        fs::create_dir_all(&sub).unwrap();
+        let ds_store = sub.join(".DS_Store");
+        fs::write(&ds_store, b"macOS metadata").unwrap();
+        prune_dirs(&root, "Artist/Album/file.mp3");
+        assert!(!sub.exists());
+        assert!(!root.join("Artist").exists());
+        assert!(root.exists());
         let _ = fs::remove_dir_all(&root);
     }
 }

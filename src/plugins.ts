@@ -1,7 +1,7 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { api } from "./api";
+import { api, type Track } from "./api";
 import type { PluginManifest } from "./plugin-api";
 import { PluginDom, SidebarEntry } from "./plugin-dom";
 import { store } from "./store";
@@ -93,6 +93,11 @@ const handlers: Record<string, (p: Running, ...args: any[]) => unknown> = {
   "library.tracks": () => [...store.tracks.values()],
   "library.track": (_p, id) => store.tracks.get(Number(id)),
   "library.match": (_p, candidates) => invoke("match_tracks", { candidates }),
+  "library.setLoved": async (_p, trackIds, loved) => {
+    const list = ids(trackIds).filter((id) => store.tracks.has(id));
+    await api.setLoved(list, !!loved);
+    store.updateTracks(list.map((id) => ({ ...store.tracks.get(id)!, loved: !!loved })));
+  },
   "playlists.list": () => [...store.playlists],
   "playlists.create": async (_p, name, trackIds) => {
     const pl = await api.createPlaylist(String(name), null, ids(trackIds));
@@ -154,6 +159,12 @@ function follow() {
     const track = store.tracks.get(e.payload.trackId);
     if (track) each("listened", { track, playedAt: e.payload.playedAt });
   });
+}
+
+export function notifyLoved(tracks: Track[], loved: boolean) {
+  for (const track of tracks) {
+    active.forEach((p) => p.port.postMessage({ event: "loved", track, loved }));
+  }
 }
 
 /** The plugin's own settings, without the `plugin.<id>.` in front. */

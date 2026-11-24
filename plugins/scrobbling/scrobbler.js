@@ -4,7 +4,8 @@
 // Listens go into a queue first (saved in the plugin's settings) and are sent
 // from there, oldest first, so songs heard offline go out once the internet is
 // back, in order. A listen leaves the queue only after every service it was
-// meant for took it (or refused it for good).
+// meant for took it (or refused it for good). Loves and unloves for Last.fm
+// ride in the same queue (`kind: "love"`), so they survive restarts too.
 
 import { md5 } from "./md5.js";
 
@@ -139,7 +140,7 @@ export class Scrobbler {
       lastfmKey: this.d.builtInKey?.key ? "built-in" : (await this.apiKey()) ? "own" : null,
       lastfmUser: await user("lastfm"),
       listenbrainzUser: await user("listenbrainz"),
-      pending: this.queue.length,
+      pending: this.queue.filter((e) => e.kind !== "love").length,
       error: this.error,
     };
   }
@@ -181,9 +182,20 @@ export class Scrobbler {
     await this.save();
   }
 
+  /** A song was loved or unloved in Honeycomb. Only the newest change per song waits. */
+  async love(track, loved) {
+    const n = names(track);
+    if (!n || !(await this.secret(CREDENTIAL.lastfm))) return;
+    this.queue = this.queue.filter((e) => !(e.kind === "love" && e.artist === n.artist && e.title === n.title));
+    this.queue.push({ id: this.nextId++, kind: "love", ...n, loved: !!loved, playedAt: Math.floor(this.now() / 1000), todo: ["lastfm"] });
+    await this.save();
+    this.changed();
+    this.flushSoon(0);
+  }
+
   pendingFor(service, limit) {
     return this.queue
-      .filter((e) => e.todo.includes(service))
+      .filter((e) => e.kind !== "love" && e.todo.includes(service))
       .sort((a, b) => a.playedAt - b.playedAt || a.id - b.id)
       .slice(0, limit);
   }
@@ -276,6 +288,7 @@ export class Scrobbler {
 
   /** Send everything waiting, oldest first. Throws when it should be tried again later. */
   async sendAll() {
+    await this.sendLoves();
     for (const service of SERVICES) {
       for (;;) {
         const cred = await this.secret(CREDENTIAL[service]);
@@ -300,6 +313,43 @@ export class Scrobbler {
         }
       }
     }
+  }
+
+  async sendLoves() {
+    for (;;) {
+      const sk = await this.secret(CREDENTIAL.lastfm);
+      const row = sk && this.queue.find((e) => e.kind === "love");
+      if (!row) return;
+      try {
+        await this.lastfm(row.loved ? "track.love" : "track.unlove", { artist: row.artist, track: row.title }, sk);
+      } catch (e) {
+        if (e instanceof Auth) {
+          await this.disconnect("lastfm");
+          throw new Error(`${e.message.replace(/\.?$/, ".")} Sign in again in Settings → Plugins.`);
+        }
+        if (!(e instanceof Rejected)) throw e;
+        this.log(`Last.fm refused a love, skipping it: ${e.message}`);
+      }
+      await this.markSent("lastfm", [row]);
+    }
+  }
+
+  /** The user's loved songs on Last.fm, as match candidates (newest first, at most 2,000). */
+  async lovedOnLastfm() {
+    const sk = await this.secret(CREDENTIAL.lastfm);
+    const user = this.d.settings.get(USER.lastfm);
+    if (!sk || !user) throw new Error("Sign in to Last.fm first.");
+    const out = [];
+    for (let page = 1, pages = 1; page <= pages && page <= 10; page++) {
+      const v = await this.lastfm("user.getLovedTracks", { user, limit: "200", page: String(page) });
+      const list = v?.lovedtracks?.track ?? [];
+      for (const t of Array.isArray(list) ? list : [list]) {
+        const artist = t?.artist?.name ?? t?.artist?.["#text"];
+        if (t?.name && artist) out.push({ title: t.name, artists: [artist] });
+      }
+      pages = Number(v?.lovedtracks?.["@attr"]?.totalPages) || 1;
+    }
+    return out;
   }
 
   /** Flush after `delay` ms (now by default), unless a flush is already waiting sooner. */

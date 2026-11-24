@@ -116,6 +116,10 @@ export interface PluginContext {
     match(candidates: MatchCandidate[]): Promise<(number | null)[]>;
     /** Called after the library reloads or changes. */
     onChange(fn: () => void): void;
+    /** Mark tracks as loved or unloved in the local library. */
+    setLoved(trackIds: number[], loved: boolean): Promise<void>;
+    /** A song's loved state changed in Honeycomb. */
+    onLoved(fn: (track: Track, loved: boolean) => void): void;
   };
   playlists: {
     list(): Promise<Playlist[]>;
