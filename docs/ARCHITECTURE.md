@@ -1,6 +1,6 @@
 # Multi-device architecture
 
-Status: **proposal**, not built. This covers how Honeycomb on the desktop, Honeycomb on iOS and OpenSubsonic servers work together. It starts from the code as it is (October 2026) and lists every place where the plan and the code disagree.
+Status: **proposal**, not built. This covers how Honeycomb on the desktop, Honeycomb on iOS and OpenSubsonic servers work together. It describes the code on `dev` as of 24 November 2026 and lists the known places where the plan and the code disagree.
 
 ## Principles
 
@@ -58,11 +58,16 @@ The answer becomes the app's **mode**, which can be changed later in Settings. A
 | Scanner | `scanner.rs` | `scan()` has no Tauri dependency. Only `spawn_scan` uses `AppHandle` (for progress events) |
 | Tags | `meta.rs` | lofty. MusicBrainz ids are **not read** today |
 | Kaseki | `kaseki.rs` | has no Tauri dependency. `convert.rs` reuses its decoder and resampler |
-| Converter | `convert.rs` | MP3, AAC (macOS only), Vorbis, FLAC 16. Used by device sync only |
-| Phone sync server | `phone.rs`, `docs/phone-sync.md`, branch `wip/phone-sync` | custom JSON-over-HTTPS protocol (details below) |
-| App glue | `lib.rs`, `player.rs`, `media.rs`, `plugins.rs`, `version.rs` | Tauri-dependent |
+| Converter | `convert.rs` | MP3, AAC (macOS only), Vorbis, FLAC 16. Used by device sync |
+| Device sync | `sync.rs` | copies or converts to players and folders; also downloads server songs straight into a sync folder (through `mirror`) |
+| OpenSubsonic client | `subsonic.rs`, `net.rs` | blocking `ureq` + rustls. `search3` paging with the `getAlbumList2` + `getAlbum` fallback (C13), playlists, `star`, `setRating`, `scrobble`, `stream`, `download`, cover art. API-key auth when offered, else salted token (C12); `.p12` client certificates |
+| Server mirror | `mirror.rs` | tables `sources`, `remote_tracks` (`remote` / `downloading` / `pinned` / `local-only`), `remote_pins` (album pins take in new songs), `remote_playlists`, `remote_outbox` (changes waiting for the server). Mirrored rows live in `tracks` with path `subsonic://<source>/<id>`. Pull, pin, background downloads, offline copies (optionally transcoded), now-playing, Disconnect with keep or delete |
+| Streaming | `stream.rs` | stream cache; Kaseki opens server tracks through `mirror::resolve` |
+| Secrets | `secrets.rs` | system keychain (server passwords and certificates, plugin secrets) |
+| App glue | `lib.rs`, `player.rs`, `media.rs`, `plugins.rs`, `version.rs`, `servers.rs` (server commands, 15-minute pull, outbox worker), `watch.rs` (folder watching), `smoke.rs` (self-test) | Tauri-dependent |
+| Phone sync server | `phone.rs`, `docs/phone-sync.md`, **only on branch `wip/phone-sync`** (one commit on top of the 30 October `dev`) | custom JSON-over-HTTPS protocol (details below). Not on `dev` |
 
-Everything is one crate (`src-tauri`), with no Cargo workspace.
+Everything is one crate (`src-tauri`), with no Cargo workspace. The settings list under Settings → Library already shows server rows with Disconnect (`src/ui/servers.ts`, `src/ui/settings.ts`).
 
 ### The current phone protocol, and what to keep from it
 
@@ -71,7 +76,7 @@ Everything is one crate (`src-tauri`), with no Cargo workspace.
 - a self-signed certificate (`phone-cert.der`) that the phone pins by SHA-256;
 - Bonjour `_honeycomb._tcp` with `libraryId` in TXT;
 - pairing with a 6-digit code (single use, 5 minutes, 5 tries), shown as a QR code (`honeycomb://pair?h=…&p=…&c=…&f=…`) or typed after checking a short fingerprint;
-- per-device tokens stored as SHA-256 hashes in `devices` (DB v6), and revocable;
+- per-device tokens stored as SHA-256 hashes in `devices` (v6 on that branch; on `dev`, v6 is ReplayGain, so `devices` needs the next free schema version), and revocable;
 - `/v1/library`, a whole-library snapshot; `/v1/tracks/{id}/file`, with Range support; `/v1/tracks/{id}/art`; `/v1/events` for plays (de-duplicated by phone-made UUID in `phone_plays`) and ratings.
 
 **Recommendation: replace the API surface, keep the plumbing.** Of the three options:
@@ -84,7 +89,17 @@ Everything is one crate (`src-tauri`), with no Cargo workspace.
   | --- | --- | --- |
   | TLS identity and pinning, Bonjour advert, server lifecycle (`Server`, `Advert`, `Running`, on/off setting), Range parsing, the pinned-client test harness, Settings → Phone UI | the code/QR pairing becomes a Honeycomb extension endpoint that returns an **API key** for `apiKeyAuthentication`. The `devices` table holds the hashed keys (same table, same revocation). `phone_plays` is replaced by per-device play totals (see conflict C5) | `/v1/library`, `/v1/events`, `/v1/tracks/*`; these are replaced by standard endpoints and `playTotals` |
 
-Nothing is deleted until you approve it. The WIP branch keeps the current version.
+**Getting it onto `dev`:** port, don't merge. The branch is one commit on a `dev` from 30 October, and `dev` has moved a long way since. Phase 2 starts by copying the pieces in the "Keep as is" column into the new server crate (with the hyper/tokio/rustls/rcgen/mdns-sd dependencies they need) and giving `devices` its new schema version. The branch stays as it is for reference, and nothing on it is deleted without the owner's sign-off.
+
+## Alternatives considered
+
+**Protocol: OpenSubsonic only, vs a custom sync protocol.**
+- *Chosen:* OpenSubsonic plus one extension. Honeycomb works with servers people already run (Navidrome is the owner's), the server crate can be tested with existing clients, and the desktop's client code is shared with the phone.
+- *Rejected: a custom protocol with a changes feed* (what `phone.rs` does today). It would allow sending only what changed instead of re-listing the library, and exact play events. But it only works between Honeycomb apps, and it is a second thing to secure and document. Delta sync can be added later as an extension if a full listing turns out to be too slow (see phase 4).
+
+**State: one owner, vs merging changes from every device.**
+- *Chosen:* one state owner per setup. Other devices queue changes (`remote_outbox`) and send them to the owner, which keeps the last write it receives. Play counts are the one thing every device adds to, and running totals per device (C5) make that safe without merging.
+- *Rejected: two-way merge* (per-field last-writer-wins with timestamps, or an operation log). It would let two offline devices edit the same playlist and both keep their edits. But it needs clocks or version vectors on every device, a merge rule per kind of data, and OpenSubsonic servers can't take part in it. No real conflicts have been seen yet.
 
 ## Desktop
 
@@ -107,28 +122,37 @@ New crate `crates/honeycomb-server`: an OpenSubsonic server library. It takes a 
 
 ### Core crate (the restructuring the server needs)
 
-The server needs the DB, models, smart playlists, tags and the scanner, but not the app. Two crates come out of `src-tauri`:
+The server needs the DB, models, smart playlists, tags and the scanner, but not the app. Two crates come out of `src-tauri`. Every module in `src-tauri/src` goes somewhere:
 
-- **`crates/honeycomb-core`:** `models`, `db`, `smart`, `meta`, `scanner::scan`, `matching`, `lyrics` and `net`, plus `resolve_playlist` (moved out of `lib.rs`). `spawn_scan` stays in the app, because it emits Tauri events.
-- **`crates/kaseki`:** `kaseki.rs`, plus `convert.rs` (which depends on it). This is the same split the iOS experiment needs anyway.
+| Module | Goes to | What has to change |
+| --- | --- | --- |
+| `kaseki`, `convert` | `crates/kaseki` | the test helper `write_wav` (used by `player` and `sync` tests) goes behind a `test-util` feature that `src-tauri` and core turn on as a dev-dependency. Kaseki's streaming test uses `stream`, so it moves to core's tests |
+| `models`, `db`, `smart`, `meta`, `matching`, `lyrics`, `net`, `secrets`, `importer` | `crates/honeycomb-core` | nothing: none of them use Tauri or the app modules |
+| `subsonic`, `stream`, `mirror` | `crates/honeycomb-core` | nothing. Together they are **the client and sync planner** that the iOS section and phase 4 refer to |
+| `scanner` | `crates/honeycomb-core` | `spawn_scan` (the only part that uses `AppHandle`) moves to the app. `scan()` keeps using `sync::MANIFEST` and `sync::synced_files`, which works because `sync` moves too |
+| `sync` | `crates/honeycomb-core` | it calls `player::listen_threshold`, a one-line pure function that moves into core with it. Core depends on the `kaseki` crate for conversion |
+| `resolve_playlist` (in `lib.rs`) | `crates/honeycomb-core` | returns `anyhow::Result<Vec<i64>>` instead of the Tauri command type `CmdResult`. The app's commands wrap it |
+| `lib`, `main`, `player`, `media`, `plugins`, `version`, `servers`, `watch`, `smoke` | stay in `src-tauri` | depend on both crates. These are the modules that use Tauri |
 
-`src-tauri` keeps `lib.rs`, `player.rs`, `media.rs`, `plugins.rs`, `version.rs`, `sync.rs` and `importer.rs`, and depends on both crates. The move is mechanical: none of the moved modules import Tauri.
+Apart from the four changes in the table, this is moving files and making items `pub`. Phase 1 compiling and passing its tests is the check.
 
 ### Desktop as a client of a server
+
+**Built** (`subsonic.rs`, `mirror.rs`, `servers.rs`; see What exists today). This section records the design; phase 4 now only covers what is missing.
 
 When a server source is added, the desktop keeps a **metadata mirror** in its normal `library.db`:
 
 - it pages through `search3` with an empty query, then fetches playlists and starred items;
 - it stores **no audio** by default.
 
-The column browser, search and sort keep working at 100k tracks, because they still read local SQLite. Each track gets a state:
+The column browser, search and sort read local SQLite, so they should scale like a local library. 100k tracks is the target; it hasn't been measured with a server yet. Each track gets a state:
 
 | State | Meaning |
 | --- | --- |
 | `remote` | metadata only; plays by streaming |
 | `downloading` | in progress |
 | `pinned` | downloaded on request and kept |
-| `local-only` | a file on this computer that the server doesn't have |
+| `local-only` | an offline copy of a song the server has since dropped, while the source is still connected |
 
 Without a server source, every track is local, and the remote and pinned UI is hidden.
 
@@ -139,7 +163,7 @@ Servers and paired phones are listed in the same place as music folders: the lis
 | Row | Shows | Sync | Disconnect |
 | --- | --- | --- | --- |
 | Folder | path | (none; "Rescan now" covers it) | **Remove**, as today |
-| Server | name, address, track count, last synced, state owner or not | refreshes the metadata mirror and sends any changes still waiting | asks **Keep the music on this computer** or **Delete it**, then removes the source. Keep turns pinned files into `local-only` tracks. Delete removes them and the mirrored tracks |
+| Server | name, address, track count, last synced, state owner or not | refreshes the metadata mirror and sends any changes still waiting | asks **Keep the music on this computer** or **Delete it**, then removes the source. Keep moves the offline copies into `Music/Honeycomb/<server>` and turns them into ordinary file tracks. Delete removes them and the mirrored tracks |
 | Phone | device name, last seen, last synced, and how to sync now (C15) | none (C15) | asks **Leave the music on the phone** or **Delete it from the phone**, then revokes the device's API key (today's "Remove" in Settings → Phone). The row then shows "Removing… · Undo" for a week, and the phone carries out the choice the next time it connects (C17) |
 
 **Disconnecting never deletes music without asking.** Every Disconnect asks whether to keep the music on that device or delete it, and **Keep** is the default button. The same choice appears when disconnecting from the other side: the phone app's own "Disconnect from this computer" or "Remove server" asks too. Keeping always leaves a working library: the kept files become local tracks with their tags, art and the stats they had when last synced. **Delete** only ever removes files that came from that connection: music in the phone's own picked folders, or in the computer's library folders, is never touched.
@@ -178,7 +202,7 @@ Both are off by default. After the first phone is paired, Settings → Phone sug
 - **The core** contains the OpenSubsonic client, certificate pinning (the rustls verifier from `phone.rs`'s test harness), the sync planner (compares a source's listing with the local DB and decides what to download, delete or push), dedupe, the local DB, Kaseki and the cable transport. The cable needs no local relay, because the core can speak OpenSubsonic over the tunnel's stream directly.
 - **Swift** also watches network conditions (`NWPathMonitor`: Low Data Mode, cellular allowed, VPN) and passes them to the core, since Rust's networking doesn't see those system settings.
 - **Pinning exists twice:** in the core for its requests, and in the `URLSession` delegate for background downloads. Both compare one SHA-256 string against the same stored value.
-- **The desktop** uses the same client and planner for phase 4 (as a client of a server). Its discovery stays `mdns-sd`.
+- **The desktop** already uses this client and planner (`subsonic`, `mirror`; they move into `honeycomb-core` in phase 1). Its discovery uses `mdns-sd`, which comes over with the phone-server code in phase 2.
 
 ## Multi-source rules
 
@@ -245,13 +269,13 @@ Cable is a transport, not a protocol: OpenSubsonic over a usbmuxd TCP tunnel. An
 Each phase ends in something testable.
 
 1. **Workspace split.** Create a Cargo workspace with `crates/honeycomb-core` and `crates/kaseki`, and make `src-tauri` depend on them. No behaviour changes.
-   *Done when:* all 72 tests pass, and the app runs, scans and plays exactly as before.
-2. **Server crate.** `crates/honeycomb-server` with the v1 endpoints over a `honeycomb-core` library, plus API-key auth and the Honeycomb extension (`pair`, `playTotals`, `rating10`). This includes C1 (ids) and C7 (smart playlists).
+   *Done when:* the full `cargo test` suite passes with the same number of tests as before the split, and a manual check (scan a folder, play a track, edit a tag, sync from a server) behaves as before.
+2. **Server crate.** Starts by porting the reusable phone-server pieces from `wip/phone-sync` (see "Getting it onto `dev`"). Then `crates/honeycomb-server` with the v1 endpoints over a `honeycomb-core` library, plus API-key auth and the Honeycomb extension (`pair`, `playTotals`, `rating10`). This includes C1 (ids) and C7 (smart playlists).
    *Done when:* tests drive every endpoint with a pinned client (the harness moves over from `phone.rs`), and an off-the-shelf OpenSubsonic client can browse and play from it on a laptop.
 3. **Desktop server and pairing.** The desktop starts the server in place of `phone.rs`'s API: same certificate, Bonjour advert, Settings → Phone and `devices` table. Pairing returns an API key. Paired phones appear in the Settings → Library list with Disconnect. Menu-bar mode and start at login. The old `/v1` endpoints are removed (only with your approval). `docs/phone-sync.md` is rewritten as the extension spec.
    *Done when:* QR pairing and typed-code pairing both work from a test client, and revoking a device turns its key's next request into an auth error.
-4. **Desktop as a client of a server.** Sources in Settings, the metadata mirror, track states (`remote`, `downloading`, `pinned`, `local-only`), streaming through Kaseki, MBID column + dedupe, the state-owner switch with playlist and star push, and server rows (Sync, Disconnect) in Settings → Library. Starts with verifying C12.
-   *Done when:* the desktop browses and plays a real Navidrome library of 10k+ tracks, pins an album for offline use, and plays and stars show up on the server.
+4. **Desktop as a client of a server: the rest.** Already built: sources, the metadata mirror, track states, streaming through Kaseki, pinning, the outbox for playlists, stars and ratings, and server rows with Sync and Disconnect. Left: the MBID column and dedupe by MBID, the state-owner switch (pushing playlists, stars and ratings when a server becomes the owner), the C3 whole-star picker, the C8 double-scrobble warning, and the C16 last pull on Disconnect.
+   *Done when:* those pieces work against a real Navidrome library of 10k+ tracks, and a full listing of that library is timed (the number decides whether delta sync is needed).
 5. **iOS** (in its own private repo). Kaseki on iOS (the 2–3 day experiment), then standalone local playback, then the desktop and server sources with background downloads, then upload-based migration.
    *Done when:* each step works on a real iPhone.
 6. **Cable (iPhone).** The usbmuxd relay (C9, C10) on top of phase 5.
