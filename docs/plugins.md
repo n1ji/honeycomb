@@ -28,7 +28,7 @@ Plugins that come with Honeycomb live in [`plugins/`](../plugins) in the repo an
 ```
 
 - `id`: lowercase letters, digits, `-` and `_`.
-- `main`: the ES module Honeycomb loads, relative to the folder (default `main.js`). It can import other `.js` files from the folder with relative paths.
+- `main`: the ES module Honeycomb loads, relative to the folder (default `main.js`). It can import other `.js` and `.mjs` files from the folder with relative paths written as plain strings (`"./lib.js"`); `import.meta.url` isn't a file address.
 - `apiVersion`: the plugin API the plugin was written for. This Honeycomb has 2, and doesn't load plugins written for 1 (see [Coming from plugin API 1](#coming-from-plugin-api-1)).
 - `hosts`: the hosts `ctx.http.request` may reach. HTTPS only, exact host names, and redirects aren't followed.
 - `loopbackPorts`: ports on 127.0.0.1 that `ctx.waitForRedirect` may listen on, for OAuth sign-ins.
@@ -107,7 +107,7 @@ Plugins used to run inside Honeycomb's own window. To move one to API 2:
 - Replace direct `fetch()` calls with `ctx.http.request()`, and `navigator.clipboard.writeText()` with `ctx.ui.copyText()`.
 - Interface code written with `ctx.ui.h()` mostly works as it is. Anything that used `document`, `innerHTML`, `querySelector`, `classList` or `el.style` needs rewriting with the members listed above.
 - `ctx.openUrl()` only opens `http://` and `https://` links.
-- Only `.js`, `.mjs` and `.json` files in the plugin's folder can be loaded.
+- Only `.js` and `.mjs` files in the plugin's folder can be loaded, through relative imports written as plain strings.
 
 ## Type checking
 

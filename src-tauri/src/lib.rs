@@ -593,19 +593,14 @@ fn plugin_manifest(app: &AppHandle, plugin: &str) -> CmdResult<plugins::Manifest
     app.state::<AppState>().plugins.manifest(plugin).map_err(|e| format!("{plugin}: {e:#}"))
 }
 
-/// Starts serving an enabled plugin's files; returns the token for its `plugin://` URLs.
+/// An enabled plugin's script files, for its frame (see `plugins::files`).
 #[tauri::command]
-fn plugin_start(app: AppHandle, plugin: String) -> CmdResult<String> {
+fn plugin_files(app: AppHandle, plugin: String) -> CmdResult<HashMap<String, String>> {
     plugin_manifest(&app, &plugin)?;
     if !plugins::enabled_ids(&app.state::<AppState>().conn()).contains(&plugin) {
         return Err(format!("{plugin} isn't turned on"));
     }
-    Ok(plugins::start(&plugin))
-}
-
-#[tauri::command]
-fn plugin_stop(plugin: String) {
-    plugins::stop(&plugin);
+    plugins::files(&app.state::<AppState>().plugins, &plugin).map_err(|e| format!("{plugin}: {e:#}"))
 }
 
 #[tauri::command]
@@ -841,13 +836,6 @@ pub fn run() {
             let path = request.uri().path().to_string();
             std::thread::spawn(move || responder.respond(serve_art(&app, &path)));
         })
-        .register_asynchronous_uri_scheme_protocol("plugin", |ctx, request, responder| {
-            let app = ctx.app_handle().clone();
-            let path = request.uri().path().to_string();
-            std::thread::spawn(move || {
-                responder.respond(plugins::serve(&app.state::<AppState>().plugins, &path))
-            });
-        })
         .setup(|app| {
             let dir = data_dir(app.handle())?;
             let db_path = dir.join("library.db");
@@ -927,8 +915,7 @@ pub fn run() {
             update_install,
             plugin_list,
             plugin_folder,
-            plugin_start,
-            plugin_stop,
+            plugin_files,
             plugin_http,
             plugin_oauth_redirect,
             plugin_secret_get,

@@ -1,9 +1,11 @@
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, type Track } from "./api";
 import type { PluginManifest } from "./plugin-api";
+import { BOOT, bootHash } from "./plugin-boot.js";
 import { PluginDom, SidebarEntry } from "./plugin-dom";
+import RUNTIME from "./plugin-runtime.js?raw";
 import { store } from "./store";
 import { toast } from "./util";
 import { promptText } from "./ui/dialogs";
@@ -31,7 +33,6 @@ interface Running {
 }
 
 const ENABLED = "plugins.enabled";
-const RUNTIME = "__honeycomb__/runtime.js";
 const START_TIMEOUT = 20_000;
 
 const active = new Map<string, Running>();
@@ -180,25 +181,26 @@ function ownSettings(id: string): Record<string, string> {
 async function activate(m: PluginManifest) {
   failed.delete(m.id);
   let p: Running | undefined;
+  let frame: HTMLIFrameElement | undefined;
   try {
-    // `plugin://localhost/<token>/`, or `http://plugin.localhost/…` on Windows.
-    const base = `${convertFileSrc("", "plugin")}${await invoke<string>("plugin_start", { plugin: m.id })}/`;
-    const frame = document.createElement("iframe");
+    const files = await invoke<Record<string, string>>("plugin_files", { plugin: m.id });
+    frame = document.createElement("iframe");
     // No allow-same-origin: the frame gets an origin of its own that matches nothing.
     frame.setAttribute("sandbox", "allow-scripts");
     frame.style.display = "none";
-    // Loaded as srcdoc so its address isn't one the app takes commands from.
+    // Loaded as srcdoc so its address isn't one the app takes commands from. It
+    // fetches nothing (WebView2 drops requests from later frames like this one).
     frame.srcdoc =
       `<!doctype html><meta charset="utf-8">` +
-      `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src ${base}">` +
-      `<script type="module" src="${base}${RUNTIME}"></script>`;
+      `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src '${await bootHash()}' blob:">` +
+      `<script type="module">${BOOT}</script>`;
+    const f = frame;
     let heard: (e: MessageEvent) => void = () => {};
     const listening = new Promise<void>((resolve, reject) => {
       heard = (e) => {
-        if (e.source === frame.contentWindow && e.data?.honeycomb === "listening") resolve();
+        if (e.source === f.contentWindow && e.data?.honeycomb === "listening") resolve();
       };
       window.addEventListener("message", heard);
-      frame.addEventListener("error", () => reject(new Error("its frame didn't load")), { once: true });
       window.setTimeout(() => reject(new Error("its frame didn't load")), START_TIMEOUT);
     });
     document.body.append(frame);
@@ -224,14 +226,14 @@ async function activate(m: PluginManifest) {
         }
       };
     });
-    const main = base + m.main.split("/").map(encodeURIComponent).join("/");
-    frame.contentWindow!.postMessage({ honeycomb: "init", manifest: m, settings: ownSettings(m.id), main }, "*", [port2]);
+    const boot = { honeycomb: "boot", runtime: RUNTIME, files, main: m.main, manifest: m, settings: ownSettings(m.id) };
+    frame.contentWindow!.postMessage(boot, "*", [port2]);
     await ready;
     active.set(m.id, running);
     follow();
   } catch (e) {
     if (p) unload(p);
-    void invoke("plugin_stop", { plugin: m.id });
+    else frame?.remove();
     const why = String(e instanceof Error ? e.message : e);
     failed.set(m.id, why);
     throw new Error(`Plugin ${m.name} failed to load: ${why}`);
@@ -260,7 +262,6 @@ async function stop(id: string) {
   });
   active.delete(id);
   unload(p);
-  await invoke("plugin_stop", { plugin: id });
 }
 
 /** Plugins that failed to load, as "id: why" (for the self-test). */

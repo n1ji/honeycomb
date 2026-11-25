@@ -5,7 +5,7 @@
 
 const PROPS = ["value", "checked", "disabled", "hidden", "title"];
 
-/** Everything a plugin's frame keeps, on `port`. `load(url)` imports the plugin's module. */
+/** Everything a plugin's frame keeps, on `port`. `load(main)` imports the plugin's module. */
 export function createRuntime(port, { manifest, settings, main }, load = (url) => import(url)) {
   const calls = new Map();
   let lastCall = 0;
@@ -351,13 +351,36 @@ export function createRuntime(port, { manifest, settings, main }, load = (url) =
   };
 }
 
-if (typeof window !== "undefined") {
-  const init = (e) => {
-    if (e.source !== window.parent || e.data?.honeycomb !== "init" || !e.ports[0]) return;
-    window.removeEventListener("message", init);
-    void createRuntime(e.ports[0], e.data).start();
+/** Relative import specifiers: `from "./x.js"`, `import "./x.js"`, `import("./x.js")`. */
+const IMPORT = /(\bfrom\s*|\bimport\s*\(\s*|\bimport\s+)(["'])(\.\.?\/[^"']*)\2/g;
+
+/**
+ * Turns a plugin's files (path → source) into modules the frame can import
+ * without fetching anything: each file gets a URL from `toUrl`, with its
+ * relative imports pointed at the others'. Returns the URL of `main`.
+ */
+export function link(files, main, toUrl = (code) => URL.createObjectURL(new Blob([code], { type: "text/javascript" }))) {
+  const urls = new Map();
+  const linking = new Set();
+  const resolve = (from, spec) => {
+    const parts = [];
+    for (const part of (from.slice(0, from.lastIndexOf("/") + 1) + spec).split("/")) {
+      if (part === "..") parts.pop();
+      else if (part && part !== ".") parts.push(part);
+    }
+    return parts.join("/");
   };
-  window.addEventListener("message", init);
-  // The frame's load event can come before this module runs (WebView2), so say when it's listening.
-  window.parent.postMessage({ honeycomb: "listening" }, "*");
+  const url = (path) => {
+    if (urls.has(path)) return urls.get(path);
+    if (linking.has(path)) throw new Error(`${path} is part of an import loop`);
+    linking.add(path);
+    const code = files[path].replace(IMPORT, (all, head, quote, spec) => {
+      const target = resolve(path, spec);
+      return Object.hasOwn(files, target) ? head + quote + url(target) + quote : all;
+    });
+    urls.set(path, toUrl(code));
+    return urls.get(path);
+  };
+  if (!Object.hasOwn(files, main)) throw new Error(`${main} is missing`);
+  return url(main);
 }

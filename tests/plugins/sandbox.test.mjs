@@ -4,7 +4,9 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createRuntime } from "../../src/plugin-runtime.js";
+import { readFileSync } from "node:fs";
+import { bootHash } from "../../src/plugin-boot.js";
+import { createRuntime, link } from "../../src/plugin-runtime.js";
 
 const MANIFEST = { id: "demo", name: "Demo", version: "1.0.0", main: "main.js" };
 const tick = () => new Promise((r) => setTimeout(r, 10));
@@ -153,4 +155,29 @@ test("the scrobbling plugin starts in the sandbox and draws its settings", async
   assert.deepEqual(seen.calls.filter((c) => c.call === "http.request"), []);
   host.postMessage({ event: "deactivate" });
   await tick();
+});
+
+test("a plugin's relative imports point at its other files", () => {
+  const made = [];
+  const toUrl = (code) => (made.push(code), `blob:${made.length}`);
+  const files = {
+    "main.js": `import { a } from "./lib/a.js";\nconst k = () => import('./key.js');\nimport "./lib/side.js";`,
+    "lib/a.js": `export { b } from "../b.js"; export const a = 1;`,
+    "lib/side.js": ``,
+    "b.js": `export const b = 2;`,
+  };
+  const main = link(files, "main.js", toUrl);
+  assert.equal(main, "blob:4");
+  assert.match(made[3], /from "blob:2"/);
+  assert.match(made[3], /import\('\.\/key\.js'\)/, "a missing file stays as it was, so importing it fails");
+  assert.match(made[3], /import "blob:3"/);
+  assert.match(made[1], /from "blob:1"/);
+  assert.throws(() => link({ "a.js": `import "./b.js"`, "b.js": `import "./a.js"` }, "a.js", toUrl), /loop/);
+  assert.throws(() => link({}, "main.js", toUrl), /missing/);
+});
+
+test("the app's CSP lets the plugin frames' start-up script run", async () => {
+  const hash = await bootHash();
+  const conf = JSON.parse(readFileSync(new URL("../../src-tauri/tauri.conf.json", import.meta.url)));
+  for (const key of ["csp", "devCsp"]) assert.ok(conf.app.security[key].includes(`'${hash}'`), `${key} needs '${hash}'`);
 });

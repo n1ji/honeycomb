@@ -6,8 +6,9 @@
 //! Each plugin runs in its own sandboxed frame (see `src/plugins.ts`), which
 //! can't call commands: Tauri only takes them from the app's own page. The
 //! page passes a plugin's requests on with the plugin's id attached, and the
-//! limits (hosts, ports, its own secrets) are checked here. A plugin's files
-//! are served over `plugin://` under a random token only its frame knows.
+//! limits (hosts, ports, its own secrets) are checked here. The page reads a
+//! plugin's script files with `files` and hands them to its frame, which
+//! fetches nothing itself.
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -20,7 +21,6 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow, bail};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
-use tauri::http::{Response, StatusCode, header};
 
 
 pub const MANIFEST: &str = "plugin.json";
@@ -28,9 +28,8 @@ pub const MANIFEST: &str = "plugin.json";
 pub const API_VERSION: u32 = 2;
 /// Largest HTTP response body handed to a plugin.
 const MAX_BODY: u64 = 32 * 1024 * 1024;
-/// The script that sets a plugin's frame up, served next to the plugin's own files.
-pub const RUNTIME: &str = "__honeycomb__/runtime.js";
-const RUNTIME_JS: &str = include_str!("../../src/plugin-runtime.js");
+/// Most script bytes one plugin may have.
+const MAX_SCRIPTS: u64 = 8 * 1024 * 1024;
 /// Largest browser request the OAuth redirect listener reads.
 const MAX_REDIRECT_REQUEST: u64 = 16 * 1024;
 
@@ -150,64 +149,48 @@ pub fn list(dir: &Path) -> Vec<Listed> {
     out
 }
 
-// ---------- plugin:// protocol ----------
+// ---------- a plugin's files ----------
 
-fn percent_decode(s: &str) -> String {
-    let b = s.as_bytes();
-    let mut out = Vec::with_capacity(b.len());
-    let mut i = 0;
-    while i < b.len() {
-        let hex = |c: u8| (c as char).to_digit(16);
-        if b[i] == b'%' && i + 2 < b.len() {
-            if let (Some(h), Some(l)) = (hex(b[i + 1]), hex(b[i + 2])) {
-                out.push((h * 16 + l) as u8);
-                i += 3;
+/// A plugin's script files (`.js`, `.mjs`) by path inside its folder, with
+/// `/` between folders. Links that lead outside the folder are skipped.
+pub fn files(dirs: &Dirs, id: &str) -> Result<HashMap<String, String>> {
+    if !valid_id(id) {
+        bail!("{id:?} isn't a plugin id");
+    }
+    let root = dirs.dir_of(id).join(id).canonicalize()?;
+    let (mut out, mut total) = (HashMap::new(), 0u64);
+    let mut seen = std::collections::HashSet::new();
+    let mut todo = vec![root.clone()];
+    while let Some(dir) = todo.pop() {
+        if !seen.insert(dir.clone()) {
+            continue;
+        }
+        for entry in std::fs::read_dir(&dir)?.flatten() {
+            if entry.file_name().to_string_lossy().starts_with('.') {
                 continue;
             }
+            let Ok(path) = entry.path().canonicalize() else { continue };
+            if !path.starts_with(&root) {
+                continue;
+            }
+            if path.is_dir() {
+                todo.push(path);
+                continue;
+            }
+            let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
+            if !matches!(ext.as_deref(), Some("js" | "mjs")) {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+            total += text.len() as u64;
+            if total > MAX_SCRIPTS {
+                bail!("{id} has more than {} MB of scripts", MAX_SCRIPTS >> 20);
+            }
+            let rel: Vec<_> = path.strip_prefix(&root)?.components().map(|c| c.as_os_str().to_string_lossy()).collect();
+            out.insert(rel.join("/"), text);
         }
-        out.push(b[i]);
-        i += 1;
     }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
-/// Running plugins: the token in each one's `plugin://` URLs, and its id.
-static SESSIONS: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
-
-/// A new token for plugin `id`'s files; the one it had stops working.
-pub fn start(id: &str) -> String {
-    let token: String = rand::random::<[u8; 16]>().iter().map(|b| format!("{b:02x}")).collect();
-    let mut sessions = SESSIONS.lock().unwrap_or_else(|p| p.into_inner());
-    sessions.retain(|(_, i)| i != id);
-    sessions.push((token.clone(), id.to_string()));
-    token
-}
-
-pub fn stop(id: &str) {
-    SESSIONS.lock().unwrap_or_else(|p| p.into_inner()).retain(|(_, i)| i != id);
-}
-
-fn session(token: &str) -> Option<String> {
-    let sessions = SESSIONS.lock().unwrap_or_else(|p| p.into_inner());
-    sessions.iter().find(|(t, _)| t == token).map(|(_, id)| id.clone())
-}
-
-/// The file `rest` names inside plugin `id`'s folder, if it's really in there.
-fn resolve(dir: &Path, id: &str, rest: &str) -> Option<PathBuf> {
-    if !valid_id(id) || rest.is_empty() {
-        return None;
-    }
-    let root = dir.join(id).canonicalize().ok()?;
-    let file = root.join(rest).canonicalize().ok()?;
-    (file.starts_with(&root) && file.is_file()).then_some(file)
-}
-
-fn content_type(path: &Path) -> &'static str {
-    match path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref() {
-        Some("js" | "mjs") => "text/javascript",
-        Some("json") => "application/json",
-        _ => "application/octet-stream",
-    }
+    Ok(out)
 }
 
 /// Ids in the `plugins.enabled` setting (a JSON list).
@@ -216,36 +199,6 @@ pub fn enabled_ids(conn: &Connection) -> Vec<String> {
         .ok()
         .and_then(|v| serde_json::from_str(&v).ok())
         .unwrap_or_default()
-}
-
-/// Serves a running plugin's files at `plugin://localhost/<token>/<file>`
-/// (`http://plugin.localhost/…` on Windows).
-pub fn serve(dirs: &Dirs, uri_path: &str) -> Response<Vec<u8>> {
-    let path = percent_decode(uri_path);
-    let found = path.trim_start_matches('/').split_once('/').and_then(|(token, rest)| {
-        let id = session(token)?;
-        if rest == RUNTIME {
-            return Some(("text/javascript", RUNTIME_JS.as_bytes().to_vec()));
-        }
-        let file = resolve(dirs.dir_of(&id), &id, rest)?;
-        Some((content_type(&file), std::fs::read(&file).ok()?))
-    });
-    if crate::smoke::folder().is_some() {
-        eprintln!("plugin file: {uri_path} -> {}", if found.is_some() { "200" } else { "404" });
-    }
-    let Some((mime, data)) = found else {
-        return Response::builder().status(StatusCode::NOT_FOUND).body(Vec::new()).unwrap();
-    };
-    Response::builder()
-        .header(header::CONTENT_TYPE, mime)
-        // The frame has no origin of its own, so its imports count as cross-origin.
-        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-        .header(header::CACHE_CONTROL, "no-cache")
-        // Only ever a script to import: opened as a page, nothing in it runs.
-        .header(header::CONTENT_SECURITY_POLICY, "sandbox; default-src 'none'")
-        .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
-        .body(data)
-        .unwrap()
 }
 
 // ---------- HTTP for plugins ----------
@@ -458,36 +411,27 @@ mod tests {
     }
 
     #[test]
-    fn serves_only_inside_the_plugin_folder() {
+    fn hands_over_only_the_plugins_own_scripts() {
         let dir = std::env::temp_dir().join(format!("honeycomb-plugins-test-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("demo/lib")).unwrap();
         std::fs::create_dir_all(dir.join("other")).unwrap();
         std::fs::write(dir.join("demo/main.js"), "export {}").unwrap();
-        std::fs::write(dir.join("demo/lib/x.js"), "").unwrap();
-        std::fs::write(dir.join("other/main.js"), "").unwrap();
-        std::fs::write(dir.join("secret.txt"), "").unwrap();
-        assert!(resolve(&dir, "demo", "main.js").is_some());
-        assert!(resolve(&dir, "demo", "lib/x.js").is_some());
-        assert!(resolve(&dir, "demo", "../secret.txt").is_none());
-        assert!(resolve(&dir, "demo", "../other/main.js").is_none());
-        assert!(resolve(&dir, "Demo", "main.js").is_none());
-
-        // Files are only reachable through the token of a plugin that's running.
+        std::fs::write(dir.join("demo/lib/x.mjs"), "x").unwrap();
+        std::fs::write(dir.join("demo/plugin.json"), "{}").unwrap();
+        std::fs::write(dir.join("demo/.hidden.js"), "").unwrap();
+        std::fs::write(dir.join("other/main.js"), "other").unwrap();
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(dir.join("other"), dir.join("demo/linked")).unwrap();
+            std::os::unix::fs::symlink(dir.join("demo"), dir.join("demo/loop")).unwrap();
+        }
         let dirs = Dirs { user: dir.clone(), bundled: None };
-        let status = |path: &str| serve(&dirs, path).status();
-        assert_eq!(status("/demo/main.js"), StatusCode::NOT_FOUND);
-        let token = start("demo");
-        assert_eq!(status(&format!("/{token}/main.js")), StatusCode::OK);
-        assert_eq!(status(&format!("/{token}/lib%2Fx.js")), StatusCode::OK);
-        assert_eq!(status(&format!("/{token}/{RUNTIME}")), StatusCode::OK);
-        assert_eq!(status(&format!("/{token}/%2E%2E/other/main.js")), StatusCode::NOT_FOUND);
-        assert_eq!(status(&format!("/{token}/../secret.txt")), StatusCode::NOT_FOUND);
-        // Starting again replaces the token; stopping ends it.
-        let second = start("demo");
-        assert_eq!(status(&format!("/{token}/main.js")), StatusCode::NOT_FOUND);
-        assert_eq!(status(&format!("/{second}/main.js")), StatusCode::OK);
-        stop("demo");
-        assert_eq!(status(&format!("/{second}/main.js")), StatusCode::NOT_FOUND);
+        let got = files(&dirs, "demo").unwrap();
+        let mut names: Vec<_> = got.keys().map(String::as_str).collect();
+        names.sort();
+        assert_eq!(names, ["lib/x.mjs", "main.js"]);
+        assert!(files(&dirs, "../other").is_err());
+        assert!(files(&dirs, "Demo").is_err());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -518,9 +462,8 @@ mod tests {
             listed.iter().map(|p| (p.manifest.as_ref().unwrap().name.as_str(), p.bundled)).collect();
         assert_eq!(names, [("Other", true), ("Mine", false)]);
         assert_eq!(dirs.manifest("other").unwrap().name, "Other");
-        let (mine, other) = (start("scrobbling"), start("other"));
-        assert_eq!(serve(&dirs, &format!("/{mine}/main.js")).body(), b"Mine");
-        assert_eq!(serve(&dirs, &format!("/{other}/main.js")).body(), b"Other");
+        assert_eq!(files(&dirs, "scrobbling").unwrap()["main.js"], "Mine");
+        assert_eq!(files(&dirs, "other").unwrap()["main.js"], "Other");
         std::fs::remove_dir_all(&root).unwrap();
     }
 }
